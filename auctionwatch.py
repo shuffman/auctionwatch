@@ -1391,7 +1391,7 @@ const STOP = new Set([
 
 function tokenizeTitle(title) {
   return [...new Set(
-    title.split(/[\s\-\/,.()\[\]&+#@!?:;'"]+/)
+    title.split(/[\s\/,.()\[\]&+#@!?:;'"]+/)
       .map(t => t.toLowerCase().replace(/[^a-z0-9]/g, ''))
       .filter(t => t.length >= 2)
       .filter(t => !/^\d+$/.test(t))
