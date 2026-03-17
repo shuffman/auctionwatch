@@ -1394,7 +1394,6 @@ function tokenizeTitle(title) {
     title.split(/[\s\/,.()\[\]&+#@!?:;'"]+/)
       .map(t => t.toLowerCase().replace(/[^a-z0-9]/g, ''))
       .filter(t => t.length >= 2)
-      .filter(t => !/^\d+$/.test(t))
       .filter(t => !/^(19|20)\d{2}$/.test(t))
       .filter(t => !STOP.has(t))
   )];
