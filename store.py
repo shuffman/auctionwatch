@@ -90,7 +90,7 @@ def _init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL COLLATE NOCASE,
-                password_hash TEXT NOT NULL
+                password_hash TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS ignored (
                 user_id INTEGER NOT NULL,
@@ -108,24 +108,16 @@ def _init_db():
             );
         """)
 
-def _db_create_user(username: str, password: str) -> bool:
-    from werkzeug.security import generate_password_hash
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                         (username.strip(), generate_password_hash(password)))
-        return True
-    except sqlite3.IntegrityError:
-        return False
-
-def _db_check_user(username: str, password: str) -> int | None:
-    from werkzeug.security import check_password_hash
+def _db_get_or_create_user(username: str) -> int:
+    """Return the user_id for username, creating the user if needed."""
+    username = username.strip()
     with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("SELECT id, password_hash FROM users WHERE username=?",
-                           (username.strip(),)).fetchone()
-    if row and check_password_hash(row[1], password):
-        return row[0]
-    return None
+        conn.execute(
+            "INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, '')",
+            (username,),
+        )
+        row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+    return row[0]
 
 def _db_get_ignored(user_id: int) -> set[str]:
     with sqlite3.connect(DB_PATH) as conn:

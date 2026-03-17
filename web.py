@@ -17,7 +17,7 @@ except ImportError:
 from models import SOURCE_COLORS_HTML
 from store import (
     _get_secret_key, _init_db,
-    _db_check_user, _db_create_user,
+    _db_get_or_create_user,
     _db_get_ignored, _db_set_ignored,
     _db_get_starred, _db_set_starred,
     _db_get_start, _db_set_start,
@@ -36,16 +36,11 @@ _LOGIN_HTML = r"""<!DOCTYPE html>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
            background: #0d0d0d; color: #e0e0e0; display: flex; align-items: center;
            justify-content: center; min-height: 100vh; }
-    .box { width: 340px; background: #141414; border: 1px solid #222; border-radius: 12px; padding: 2rem; }
-    .brand { font-size: 1.2rem; font-weight: 700; color: #00bcd4; text-align: center; margin-bottom: 1.75rem; }
-    .tabs { display: flex; border-bottom: 1px solid #222; margin-bottom: 1.5rem; }
-    .tab { flex: 1; text-align: center; padding: .55rem; font-size: .85rem; cursor: pointer;
-           color: #555; border-bottom: 2px solid transparent; transition: all .15s; }
-    .tab.on { color: #e0e0e0; border-bottom-color: #00bcd4; }
-    .form-section { display: none; }
-    .form-section.on { display: block; }
+    .box { width: 320px; background: #141414; border: 1px solid #222; border-radius: 12px; padding: 2rem; }
+    .brand { font-size: 1.2rem; font-weight: 700; color: #00bcd4; text-align: center; margin-bottom: 0.5rem; }
+    .sub { font-size: .78rem; color: #555; text-align: center; margin-bottom: 1.75rem; }
     label { display: block; font-size: .78rem; color: #888; margin-bottom: .3rem; }
-    input[type=text], input[type=password] {
+    input[type=text] {
       width: 100%; background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
       padding: .5rem .75rem; color: #e0e0e0; font-size: .9rem; outline: none; margin-bottom: 1rem;
     }
@@ -55,48 +50,24 @@ _LOGIN_HTML = r"""<!DOCTYPE html>
       padding: .55rem; color: #000; font-weight: 700; font-size: .9rem; cursor: pointer;
     }
     button[type=submit]:hover { background: #26c6da; }
+    .skip { display: block; text-align: center; margin-top: 1rem; font-size: .78rem; color: #444;
+            text-decoration: none; }
+    .skip:hover { color: #888; }
     .error { color: #ff5252; font-size: .78rem; margin-bottom: .9rem; min-height: 1.1rem; }
   </style>
 </head>
 <body>
 <div class="box">
   <div class="brand">AuctionWatch</div>
-  <div class="tabs">
-    <div class="tab on" id="t-login" onclick="show('login')">Sign in</div>
-    <div class="tab"    id="t-reg"   onclick="show('reg')">Create account</div>
-  </div>
-  <div class="error" id="err">{{error}}</div>
-
-  <div class="form-section on" id="s-login">
-    <form method="post" action="/login">
-      <label>Username</label>
-      <input type="text" name="username" autocomplete="username" autofocus required>
-      <label>Password</label>
-      <input type="password" name="password" autocomplete="current-password" required>
-      <button type="submit">Sign in</button>
-    </form>
-  </div>
-
-  <div class="form-section" id="s-reg">
-    <form method="post" action="/register">
-      <label>Username</label>
-      <input type="text" name="username" autocomplete="username" required>
-      <label>Password</label>
-      <input type="password" name="password" autocomplete="new-password" required>
-      <button type="submit">Create account</button>
-    </form>
-  </div>
+  <div class="sub">Sign in to save starred &amp; ignored listings</div>
+  <div class="error">{{error}}</div>
+  <form method="post" action="/login">
+    <label>Username</label>
+    <input type="text" name="username" autocomplete="username" autofocus required>
+    <button type="submit">Continue</button>
+  </form>
+  <a class="skip" href="/">Continue as guest</a>
 </div>
-<script>
-function show(tab){
-  document.getElementById('s-login').classList.toggle('on', tab==='login');
-  document.getElementById('s-reg').classList.toggle('on',   tab==='reg');
-  document.getElementById('t-login').classList.toggle('on', tab==='login');
-  document.getElementById('t-reg').classList.toggle('on',   tab==='reg');
-}
-// If server flagged a register error, show that tab
-if(document.getElementById('err').textContent.includes('taken')) show('reg');
-</script>
 </body>
 </html>"""
 
@@ -115,62 +86,106 @@ _WEB_HTML = r"""<!DOCTYPE html>
     }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
            background: var(--bg); color: var(--text); }
+
+    /* ── Header: brand + search + auth ── */
     header {
-      background: var(--bg2); border-bottom: 1px solid #222;
-      padding: 0.9rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+      background: var(--bg2); border-bottom: 1px solid #1e1e1e;
+      padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 0.75rem;
     }
-    .brand { font-size: 1.1rem; font-weight: 700; color: var(--accent); white-space: nowrap; }
-    #sf { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; flex: 1; }
+    .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; }
+    #sf { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; }
     #q {
-      flex: 1; min-width: 180px; background: #1e1e1e; border: 1px solid #333;
+      flex: 1; min-width: 0; background: #1e1e1e; border: 1px solid #2e2e2e;
       border-radius: 6px; padding: 0.42rem 0.75rem; color: var(--text); font-size: 0.9rem; outline: none;
     }
     #q:focus { border-color: var(--accent); }
-    .pills { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-    .pill {
-      padding: 0.28rem 0.6rem; border-radius: 20px; font-size: 0.73rem; font-weight: 600;
-      border: 1px solid #333; color: var(--dim); cursor: pointer; user-select: none; transition: all 0.15s;
-    }
-    .pill.on { color: #fff; }
-    .pill[data-site="cab"].on  { color: #00bcd4; border-color: #00bcd4; }
-    .pill[data-site="bat"].on  { color: #4caf50; border-color: #4caf50; }
-    .pill[data-site="hagerty"].on { color: #2196f3; border-color: #2196f3; }
-    .pill[data-site="pcar"].on { color: #9c27b0; border-color: #9c27b0; }
-    .pill[data-site].prohibit { color: var(--red); border-color: rgba(255,82,82,0.45); }
-    .pill[data-filter="active"].on  { color: var(--green);  border-color: var(--green); }
-    .pill[data-filter="starred"].on { color: var(--yellow); border-color: var(--yellow); }
-    .pill[data-filter="ignored"].on { color: var(--red);    border-color: var(--red); }
     #search-btn {
-      padding: 0.38rem 1rem; background: var(--accent); border: none; border-radius: 6px;
-      color: #000; font-weight: 700; font-size: 0.85rem; cursor: pointer; white-space: nowrap;
+      padding: 0.4rem 1.1rem; background: var(--accent); border: none; border-radius: 6px;
+      color: #000; font-weight: 700; font-size: 0.85rem; cursor: pointer; white-space: nowrap; flex-shrink: 0;
     }
     #search-btn:hover { background: #26c6da; }
     #search-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-    #statusbar {
-      padding: 0.45rem 1.5rem; background: var(--bg2); border-bottom: 1px solid #1e1e1e;
-      font-size: 0.78rem; color: var(--dim); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+
+    /* ── Filter bar ── */
+    #filters {
+      background: #111; border-bottom: 1px solid #1e1e1e;
+      padding: 0.5rem 1.5rem; display: flex; align-items: center; gap: 0; flex-wrap: wrap; row-gap: 0.4rem;
     }
+    .fg { display: flex; align-items: center; gap: 0.3rem; padding: 0 0.9rem; }
+    .fg:first-child { padding-left: 0; }
+    .fg:last-child  { padding-right: 0; }
+    .fsep { width: 1px; height: 16px; background: #222; flex-shrink: 0; align-self: center; }
+    .flabel { font-size: 0.68rem; color: #3a3a3a; white-space: nowrap; text-transform: uppercase;
+              letter-spacing: 0.06em; margin-right: 0.15rem; }
+    .fdash { color: #2a2a2a; font-size: 0.8rem; }
+    .pills { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+    .pill {
+      padding: 0.22rem 0.55rem; border-radius: 20px; font-size: 0.71rem; font-weight: 600;
+      border: 1px solid #252525; color: #3a3a3a; cursor: pointer; user-select: none; transition: all 0.15s;
+    }
+    .pill:hover { border-color: #3a3a3a; color: #666; }
+    .pill[data-site="cab"].on  { color: #00bcd4; border-color: rgba(0,188,212,0.5); background: rgba(0,188,212,0.07); }
+    .pill[data-site="bat"].on  { color: #4caf50; border-color: rgba(76,175,80,0.5);  background: rgba(76,175,80,0.07); }
+    .pill[data-site="hagerty"].on { color: #2196f3; border-color: rgba(33,150,243,0.5); background: rgba(33,150,243,0.07); }
+    .pill[data-site="pcar"].on { color: #9c27b0; border-color: rgba(156,39,176,0.5); background: rgba(156,39,176,0.07); }
+    .pill[data-site].prohibit { color: var(--red); border-color: rgba(255,82,82,0.4); background: rgba(255,82,82,0.06); }
+    .pill[data-filter="active"].on  { color: var(--green);  border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
+    .pill[data-filter="starred"].on { color: var(--yellow); border-color: rgba(230,200,74,0.45); background: rgba(230,200,74,0.07); }
+    .pill[data-filter="ignored"].on { color: var(--red);    border-color: rgba(255,82,82,0.45);  background: rgba(255,82,82,0.07); }
+    #filters input[type=number] {
+      width: 60px; background: #171717; border: 1px solid #252525; border-radius: 4px;
+      padding: 0.22rem 0.4rem; color: #aaa; font-size: 0.71rem; outline: none;
+    }
+    #filters input[type=number]:focus { border-color: var(--accent); color: var(--text); }
+    #filters input[type=number]::-webkit-inner-spin-button,
+    #filters input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    #filters input[type=number] { -moz-appearance: textfield; }
+
+    /* ── Status / loading bar ── */
+    #infobar {
+      background: var(--bg2); border-bottom: 1px solid #1a1a1a;
+      padding: 0.38rem 1.5rem; display: flex; align-items: center; gap: 0.75rem;
+      flex-wrap: wrap; min-height: 2rem;
+    }
+    #statusbar { font-size: 0.75rem; color: var(--dim); }
     .sc { color: var(--text); font-weight: 600; }
-    .nb { background: rgba(0,230,118,0.15); color: var(--green); padding: 0.08rem 0.38rem; border-radius: 4px; font-weight: 700; }
-    #site-status { display: flex; gap: 0.6rem; flex-wrap: wrap; padding: 0.75rem 1.5rem; min-height: 2.5rem; }
+    .nb { background: rgba(0,230,118,0.15); color: var(--green); padding: 0.07rem 0.35rem; border-radius: 4px; font-weight: 700; }
+    #site-status { display: flex; gap: 0.45rem; flex-wrap: wrap; margin-left: auto; }
     .spill {
-      display: flex; align-items: center; gap: 0.35rem; padding: 0.28rem 0.6rem;
-      border-radius: 20px; font-size: 0.72rem; font-weight: 600; border: 1px solid #2a2a2a; color: var(--dim);
+      display: flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.5rem;
+      border-radius: 20px; font-size: 0.68rem; font-weight: 600; border: 1px solid #222; color: var(--dim);
       transition: all 0.2s;
     }
     .spill.loading { animation: pulse 1.2s infinite; }
-    .spill.done   { color: var(--green); border-color: rgba(0,230,118,0.35); }
-    .spill.error  { color: var(--red);   border-color: rgba(255,82,82,0.35); }
-    .spin { width: 9px; height: 9px; border: 2px solid #333; border-top-color: currentColor;
+    .spill.done   { color: var(--green); border-color: rgba(0,230,118,0.3); }
+    .spill.error  { color: var(--red);   border-color: rgba(255,82,82,0.3); }
+    .spin { width: 8px; height: 8px; border: 1.5px solid #333; border-top-color: currentColor;
             border-radius: 50%; animation: spin 0.7s linear infinite; }
     @keyframes spin  { to { transform: rotate(360deg); } }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+
+    /* ── Tag bar ── */
+    #tag-bar {
+      padding: 0.4rem 1.5rem; border-bottom: 1px solid #161616;
+      display: none; flex-wrap: wrap; gap: 0.25rem; align-items: center;
+      background: #0f0f0f;
+    }
+    .tpill {
+      padding: 0.18rem 0.55rem; border-radius: 20px; font-size: 0.68rem; font-weight: 600;
+      border: 1px solid #1e1e1e; color: #333; cursor: pointer; user-select: none;
+      transition: all 0.12s;
+    }
+    .tpill:hover { border-color: #3a3a3a; color: #555; }
+    .tpill.require { color: var(--green); border-color: rgba(0,230,118,0.4); background: rgba(0,230,118,0.06); }
+    .tpill.prohibit { color: var(--red);  border-color: rgba(255,82,82,0.4); background: rgba(255,82,82,0.06); }
+
+    /* ── Cards ── */
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 1rem; padding: 1.25rem 1.5rem; }
     .seen-div {
       grid-column: 1/-1; display: flex; align-items: center; gap: 0.6rem;
-      color: #2e2e2e; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; padding: 0.1rem 0;
+      color: #2a2a2a; font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; padding: 0.1rem 0;
     }
-    .seen-div::before, .seen-div::after { content:''; flex:1; border-top: 1px solid #202020; }
+    .seen-div::before, .seen-div::after { content:''; flex:1; border-top: 1px solid #1c1c1c; }
     .card {
       background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
       overflow: hidden; transition: transform .15s, box-shadow .15s, border-color .15s, opacity .15s;
@@ -186,14 +201,11 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .card.is-ignored:hover { opacity: 0.85; }
     .card.is-ignored .abtn.ign:hover { border-color: #4a4; color: #6c6; }
     @keyframes fadeout { to { opacity:0; transform:scale(.93); } }
-    .cactions {
-      position: absolute; top: 7px; right: 7px; display: flex; gap: 5px; z-index: 5;
-    }
+    .cactions { position: absolute; top: 7px; right: 7px; display: flex; gap: 5px; z-index: 5; }
     .abtn {
       width: 26px; height: 26px; background: rgba(8,8,8,.82); border: 1px solid #3a3a3a;
       border-radius: 50%; color: #555; cursor: pointer; font-size: 0.8rem;
-      display: flex; align-items: center; justify-content: center;
-      transition: all .1s; padding: 0;
+      display: flex; align-items: center; justify-content: center; transition: all .1s; padding: 0;
     }
     .abtn:hover { background: #1c1c1c; color: #fff; border-color: #555; }
     .abtn.ign:hover { border-color: #c44; color: #e66; }
@@ -219,69 +231,62 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .tl.active { background: rgba(0,230,118,.14); color: var(--green); }
     .tl.ended  { background: rgba(255,82,82,.1);  color: #4a4a4a; }
     .empty { grid-column:1/-1; text-align:center; color:#2e2e2e; padding:4rem; font-size:.95rem; }
-    #tag-bar {
-      padding: 0.45rem 1.5rem; border-bottom: 1px solid #1a1a1a;
-      display: none; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+    @media(max-width:640px) {
+      .grid { padding: 1rem; gap: .8rem; }
+      header { padding: .6rem 1rem; }
+      #filters { padding: .45rem 1rem; }
+      .fg { padding: 0 .6rem; }
     }
-    .tpill {
-      padding: 0.22rem 0.6rem; border-radius: 20px; font-size: 0.7rem; font-weight: 600;
-      border: 1px solid #252525; color: #3a3a3a; cursor: pointer; user-select: none;
-      transition: all 0.12s;
-    }
-    .tpill:hover { border-color: #444; color: #666; }
-    .tpill.require { color: var(--green); border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
-    .tpill.prohibit { color: var(--red);   border-color: rgba(255,82,82,0.45);  background: rgba(255,82,82,0.07); }
-    @media(max-width:600px) { .grid{padding:1rem;gap:.8rem} header{padding:.7rem 1rem} }
-    .range-row {
-      display: flex; align-items: center; gap: 0.35rem;
-      font-size: 0.72rem; color: var(--dim); white-space: nowrap;
-    }
-    .range-row label { color: #666; }
-    .range-row input[type=number] {
-      width: 68px; background: #1e1e1e; border: 1px solid #333; border-radius: 5px;
-      padding: 0.28rem 0.45rem; color: var(--text); font-size: 0.72rem; outline: none;
-    }
-    .range-row input[type=number]:focus { border-color: var(--accent); }
-    .range-row input[type=number]::-webkit-inner-spin-button,
-    .range-row input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
-    .range-row input[type=number] { -moz-appearance: textfield; }
-    .range-sep { color: #333; }
   </style>
 </head>
 <body>
+
 <header>
   <div class="brand">AuctionWatch</div>
-  <a href="/logout" style="margin-left:auto;font-size:.75rem;color:#444;text-decoration:none;white-space:nowrap" onmouseover="this.style.color='#888'" onmouseout="this.style.color='#444'">Sign out</a>
   <form id="sf">
-    <input id="q" type="text" placeholder="Search auctions..." autocomplete="off">
-    <div class="pills" id="spills">
-      <div class="pill on" data-site="cab" data-label="C&amp;B">C&amp;B</div>
-      <div class="pill on" data-site="bat" data-label="BaT">BaT</div>
-      <div class="pill on" data-site="hagerty" data-label="Hagerty">Hagerty</div>
-      <div class="pill on" data-site="pcar" data-label="PCar">PCar</div>
-    </div>
-    <div class="pills">
-      <div class="pill on" data-filter="active">Active only</div>
-      <div class="pill" data-filter="starred">★ Starred</div>
-      <div class="pill" data-filter="ignored">✕ Ignored</div>
-    </div>
-    <div class="range-row">
-      <label>Year</label>
-      <input type="number" id="year-lo" placeholder="Min" min="1900" max="2030" step="1">
-      <span class="range-sep">–</span>
-      <input type="number" id="year-hi" placeholder="Max" min="1900" max="2030" step="1">
-    </div>
-    <div class="range-row">
-      <label>Price $</label>
-      <input type="number" id="price-lo" placeholder="Min" min="0" step="500">
-      <span class="range-sep">–</span>
-      <input type="number" id="price-hi" placeholder="Max" min="0" step="500">
-    </div>
+    <input id="q" type="text" placeholder="Search auctions…" autocomplete="off">
     <button type="submit" id="search-btn">Search</button>
   </form>
+  {{auth_link}}
 </header>
-<div id="statusbar">Ready — enter a search query above</div>
-<div id="site-status"></div>
+
+<div id="filters">
+  <div class="fg">
+    <div class="pills" id="spills">
+      <div class="pill on" data-site="cab"     data-label="C&amp;B">C&amp;B</div>
+      <div class="pill on" data-site="bat"     data-label="BaT">BaT</div>
+      <div class="pill on" data-site="hagerty" data-label="Hagerty">Hagerty</div>
+      <div class="pill on" data-site="pcar"    data-label="PCar">PCar</div>
+    </div>
+  </div>
+  <div class="fsep"></div>
+  <div class="fg">
+    <div class="pills">
+      <div class="pill on" data-filter="active">Active only</div>
+      <div class="pill"    data-filter="starred">★ Starred</div>
+      <div class="pill"    data-filter="ignored">✕ Ignored</div>
+    </div>
+  </div>
+  <div class="fsep"></div>
+  <div class="fg">
+    <span class="flabel">Year</span>
+    <input type="number" id="year-lo" placeholder="Min" min="1900" max="2030" step="1">
+    <span class="fdash">–</span>
+    <input type="number" id="year-hi" placeholder="Max" min="1900" max="2030" step="1">
+  </div>
+  <div class="fsep"></div>
+  <div class="fg">
+    <span class="flabel">Price $</span>
+    <input type="number" id="price-lo" placeholder="Min" min="0" step="500">
+    <span class="fdash">–</span>
+    <input type="number" id="price-hi" placeholder="Max" min="0" step="500">
+  </div>
+</div>
+
+<div id="infobar">
+  <div id="statusbar">Ready — enter a search query above</div>
+  <div id="site-status"></div>
+</div>
 <div id="tag-bar"></div>
 <div class="grid" id="grid"></div>
 
@@ -637,40 +642,40 @@ def serve_web(initial_query: str = "", port: int = 5173):
     def login():
         from flask import request as freq2, session as fsession, redirect
         if freq2.method == "POST":
-            uid = _db_check_user(freq2.form.get("username",""), freq2.form.get("password",""))
-            if uid:
-                fsession["user_id"] = uid
-                fsession["username"] = freq2.form.get("username","").strip()
-                return redirect("/")
-            return _LOGIN_HTML.replace("{{error}}", "Invalid username or password")
-        return _LOGIN_HTML.replace("{{error}}", "")
-
-    @app.route("/register", methods=["POST"])
-    def register():
-        from flask import request as freq2, session as fsession, redirect
-        username = freq2.form.get("username", "").strip()
-        password = freq2.form.get("password", "")
-        if not username or not password:
-            return _LOGIN_HTML.replace("{{error}}", "Username and password are required")
-        if _db_create_user(username, password):
-            uid = _db_check_user(username, password)
+            username = freq2.form.get("username", "").strip()
+            if not username:
+                return _LOGIN_HTML.replace("{{error}}", "Please enter a username")
+            uid = _db_get_or_create_user(username)
             fsession["user_id"] = uid
             fsession["username"] = username
             return redirect("/")
-        return _LOGIN_HTML.replace("{{error}}", "Username already taken")
+        return _LOGIN_HTML.replace("{{error}}", "")
 
     @app.route("/logout")
     def logout():
         from flask import session as fsession, redirect
         fsession.clear()
-        return redirect("/login")
+        return redirect("/")
 
     @app.route("/")
     def index():
-        from flask import redirect
-        if not _uid():
-            return redirect("/login")
-        return _WEB_HTML
+        uid = _uid()
+        if uid:
+            from flask import session as fsession
+            uname = fsession.get("username", "")
+            auth_link = (
+                f'<span style="margin-left:auto;font-size:.75rem;color:#555;white-space:nowrap">'
+                f'{uname} &nbsp;·&nbsp; '
+                f'<a href="/logout" style="color:#444;text-decoration:none" '
+                f'onmouseover="this.style.color=\'#888\'" onmouseout="this.style.color=\'#444\'">Sign out</a>'
+                f'</span>'
+            )
+        else:
+            auth_link = (
+                '<a href="/login" style="margin-left:auto;font-size:.75rem;color:#444;text-decoration:none;white-space:nowrap"'
+                ' onmouseover="this.style.color=\'#888\'" onmouseout="this.style.color=\'#444\'">Sign in</a>'
+            )
+        return _WEB_HTML.replace("{{auth_link}}", auth_link)
 
     @app.route("/api/search/stream")
     def search_stream():
@@ -682,11 +687,8 @@ def serve_web(initial_query: str = "", port: int = 5173):
             return jsonify({"error": "no query"}), 400
 
         uid = _uid()
-        if not uid:
-            return jsonify({"error": "not authenticated"}), 401
-
-        ignored  = _db_get_ignored(uid)
-        start_id = _db_get_start(uid)
+        ignored  = _db_get_ignored(uid) if uid else set()
+        start_id = _db_get_start(uid)   if uid else ""
 
         result_q: queue.Queue = queue.Queue()
 
@@ -748,39 +750,37 @@ def serve_web(initial_query: str = "", port: int = 5173):
     @app.route("/api/ignore", methods=["POST"])
     def api_ignore():
         uid = _uid()
-        if not uid: return jsonify({"error": "not authenticated"}), 401
         lid     = (freq.json or {}).get("id", "")
         ignored = (freq.json or {}).get("ignored", True)
-        if lid:
+        if uid and lid:
             _db_set_ignored(uid, lid, ignored)
         return jsonify({"ok": True})
 
     @app.route("/api/start", methods=["POST"])
     def api_start():
         uid = _uid()
-        if not uid: return jsonify({"error": "not authenticated"}), 401
         lid = (freq.json or {}).get("id", "")
-        if lid:
+        if uid and lid:
             _db_set_start(uid, lid)
         return jsonify({"ok": True})
 
     @app.route("/api/star", methods=["POST"])
     def api_star():
         uid = _uid()
-        if not uid: return jsonify({"error": "not authenticated"}), 401
         lid     = (freq.json or {}).get("id", "")
         starred = (freq.json or {}).get("starred", True)
-        if lid:
+        if uid and lid:
             _db_set_starred(uid, lid, starred)
         return jsonify({"ok": True})
 
     @app.route("/api/store")
     def api_store():
         uid = _uid()
-        if not uid: return jsonify({"error": "not authenticated"}), 401
-        return jsonify({"ignored": list(_db_get_ignored(uid)),
-                        "start":   _db_get_start(uid),
-                        "starred": list(_db_get_starred(uid))})
+        if uid:
+            return jsonify({"ignored": list(_db_get_ignored(uid)),
+                            "start":   _db_get_start(uid),
+                            "starred": list(_db_get_starred(uid))})
+        return jsonify({"ignored": [], "start": "", "starred": []})
 
     # In a server environment (Railway etc.) PORT is set; bind publicly and skip browser open
     server_port = int(os.environ.get("PORT", port))
