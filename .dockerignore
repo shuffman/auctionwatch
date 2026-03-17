@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+debug_*.html
+*.json
+*.db
+*.secret
+.git/
+README.md
+ARCHITECTURE.md

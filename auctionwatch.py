@@ -16,6 +16,8 @@ import re
 import asyncio
 import json
 import os
+import secrets
+import sqlite3
 import sys
 import webbrowser
 from dataclasses import dataclass, asdict
@@ -48,6 +50,9 @@ except ImportError:
 # ─── Persistent Store ─────────────────────────────────────────────────────────
 
 STORE_PATH = Path.home() / ".auctionwatch.json"
+_DATA_DIR = Path(os.environ.get("DATA_DIR", Path.home()))
+DB_PATH = _DATA_DIR / ".auctionwatch.db"
+SECRET_KEY_PATH = _DATA_DIR / ".auctionwatch.secret"
 
 
 def _load_store() -> dict:
@@ -80,6 +85,17 @@ def store_get_ignored() -> set[str]:
     return set(_load_store().get("ignored", []))
 
 
+def store_set_ignored(listing_id: str, ignored: bool):
+    data = _load_store()
+    s = set(data.get("ignored", []))
+    if ignored:
+        s.add(listing_id)
+    else:
+        s.discard(listing_id)
+    data["ignored"] = sorted(s)
+    _save_store(data)
+
+
 def store_get_start() -> str:
     return _load_store().get("start", "")
 
@@ -97,6 +113,94 @@ def store_set_starred(listing_id: str, starred: bool):
 
 def store_get_starred() -> set[str]:
     return set(_load_store().get("starred", []))
+
+
+# ─── Auth / Multi-user DB ─────────────────────────────────────────────────────
+
+def _get_secret_key() -> bytes:
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if SECRET_KEY_PATH.exists():
+        return SECRET_KEY_PATH.read_bytes()
+    key = secrets.token_bytes(32)
+    SECRET_KEY_PATH.write_bytes(key)
+    return key
+
+def _init_db():
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                password_hash TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ignored (
+                user_id INTEGER NOT NULL,
+                listing_id TEXT NOT NULL,
+                PRIMARY KEY (user_id, listing_id)
+            );
+            CREATE TABLE IF NOT EXISTS starred (
+                user_id INTEGER NOT NULL,
+                listing_id TEXT NOT NULL,
+                PRIMARY KEY (user_id, listing_id)
+            );
+            CREATE TABLE IF NOT EXISTS user_start (
+                user_id INTEGER PRIMARY KEY,
+                listing_id TEXT NOT NULL
+            );
+        """)
+
+def _db_create_user(username: str, password: str) -> bool:
+    from werkzeug.security import generate_password_hash
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                         (username.strip(), generate_password_hash(password)))
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+def _db_check_user(username: str, password: str) -> int | None:
+    from werkzeug.security import check_password_hash
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT id, password_hash FROM users WHERE username=?",
+                           (username.strip(),)).fetchone()
+    if row and check_password_hash(row[1], password):
+        return row[0]
+    return None
+
+def _db_get_ignored(user_id: int) -> set[str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT listing_id FROM ignored WHERE user_id=?", (user_id,)).fetchall()
+    return {r[0] for r in rows}
+
+def _db_set_ignored(user_id: int, listing_id: str, ignored: bool):
+    with sqlite3.connect(DB_PATH) as conn:
+        if ignored:
+            conn.execute("INSERT OR IGNORE INTO ignored VALUES (?,?)", (user_id, listing_id))
+        else:
+            conn.execute("DELETE FROM ignored WHERE user_id=? AND listing_id=?", (user_id, listing_id))
+
+def _db_get_starred(user_id: int) -> set[str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT listing_id FROM starred WHERE user_id=?", (user_id,)).fetchall()
+    return {r[0] for r in rows}
+
+def _db_set_starred(user_id: int, listing_id: str, starred: bool):
+    with sqlite3.connect(DB_PATH) as conn:
+        if starred:
+            conn.execute("INSERT OR IGNORE INTO starred VALUES (?,?)", (user_id, listing_id))
+        else:
+            conn.execute("DELETE FROM starred WHERE user_id=? AND listing_id=?", (user_id, listing_id))
+
+def _db_get_start(user_id: int) -> str:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT listing_id FROM user_start WHERE user_id=?", (user_id,)).fetchone()
+    return row[0] if row else ""
+
+def _db_set_start(user_id: int, listing_id: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT OR REPLACE INTO user_start VALUES (?,?)", (user_id, listing_id))
 
 
 # ─── Data Model ───────────────────────────────────────────────────────────────
@@ -913,6 +1017,81 @@ def generate_html(listings: list[Listing], query: str) -> str:
 
 # ─── Web UI ───────────────────────────────────────────────────────────────────
 
+_LOGIN_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AuctionWatch — Sign in</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           background: #0d0d0d; color: #e0e0e0; display: flex; align-items: center;
+           justify-content: center; min-height: 100vh; }
+    .box { width: 340px; background: #141414; border: 1px solid #222; border-radius: 12px; padding: 2rem; }
+    .brand { font-size: 1.2rem; font-weight: 700; color: #00bcd4; text-align: center; margin-bottom: 1.75rem; }
+    .tabs { display: flex; border-bottom: 1px solid #222; margin-bottom: 1.5rem; }
+    .tab { flex: 1; text-align: center; padding: .55rem; font-size: .85rem; cursor: pointer;
+           color: #555; border-bottom: 2px solid transparent; transition: all .15s; }
+    .tab.on { color: #e0e0e0; border-bottom-color: #00bcd4; }
+    .form-section { display: none; }
+    .form-section.on { display: block; }
+    label { display: block; font-size: .78rem; color: #888; margin-bottom: .3rem; }
+    input[type=text], input[type=password] {
+      width: 100%; background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
+      padding: .5rem .75rem; color: #e0e0e0; font-size: .9rem; outline: none; margin-bottom: 1rem;
+    }
+    input:focus { border-color: #00bcd4; }
+    button[type=submit] {
+      width: 100%; background: #00bcd4; border: none; border-radius: 6px;
+      padding: .55rem; color: #000; font-weight: 700; font-size: .9rem; cursor: pointer;
+    }
+    button[type=submit]:hover { background: #26c6da; }
+    .error { color: #ff5252; font-size: .78rem; margin-bottom: .9rem; min-height: 1.1rem; }
+  </style>
+</head>
+<body>
+<div class="box">
+  <div class="brand">AuctionWatch</div>
+  <div class="tabs">
+    <div class="tab on" id="t-login" onclick="show('login')">Sign in</div>
+    <div class="tab"    id="t-reg"   onclick="show('reg')">Create account</div>
+  </div>
+  <div class="error" id="err">{{error}}</div>
+
+  <div class="form-section on" id="s-login">
+    <form method="post" action="/login">
+      <label>Username</label>
+      <input type="text" name="username" autocomplete="username" autofocus required>
+      <label>Password</label>
+      <input type="password" name="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+
+  <div class="form-section" id="s-reg">
+    <form method="post" action="/register">
+      <label>Username</label>
+      <input type="text" name="username" autocomplete="username" required>
+      <label>Password</label>
+      <input type="password" name="password" autocomplete="new-password" required>
+      <button type="submit">Create account</button>
+    </form>
+  </div>
+</div>
+<script>
+function show(tab){
+  document.getElementById('s-login').classList.toggle('on', tab==='login');
+  document.getElementById('s-reg').classList.toggle('on',   tab==='reg');
+  document.getElementById('t-login').classList.toggle('on', tab==='login');
+  document.getElementById('t-reg').classList.toggle('on',   tab==='reg');
+}
+// If server flagged a register error, show that tab
+if(document.getElementById('err').textContent.includes('taken')) show('reg');
+</script>
+</body>
+</html>"""
+
 _WEB_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -949,7 +1128,9 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .pill[data-site="bat"].on  { color: #4caf50; border-color: #4caf50; }
     .pill[data-site="hagerty"].on { color: #2196f3; border-color: #2196f3; }
     .pill[data-site="pcar"].on { color: #9c27b0; border-color: #9c27b0; }
-    .pill[data-filter].on { color: var(--green); border-color: var(--green); }
+    .pill[data-filter="active"].on  { color: var(--green);  border-color: var(--green); }
+    .pill[data-filter="starred"].on { color: var(--yellow); border-color: var(--yellow); }
+    .pill[data-filter="ignored"].on { color: var(--red);    border-color: var(--red); }
     #search-btn {
       padding: 0.38rem 1rem; background: var(--accent); border: none; border-radius: 6px;
       color: #000; font-weight: 700; font-size: 0.85rem; cursor: pointer; white-space: nowrap;
@@ -992,6 +1173,9 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .card.out { animation: fadeout .22s ease forwards; pointer-events: none; }
     .card.starred { border-color: rgba(230,200,74,.45); }
     .card.starred:hover { border-color: rgba(230,200,74,.75); box-shadow: 0 10px 28px rgba(230,200,74,.1); }
+    .card.is-ignored { opacity: 0.55; }
+    .card.is-ignored:hover { opacity: 0.85; }
+    .card.is-ignored .abtn.ign:hover { border-color: #4a4; color: #6c6; }
     @keyframes fadeout { to { opacity:0; transform:scale(.93); } }
     .cactions {
       position: absolute; top: 7px; right: 7px; display: flex; gap: 5px; z-index: 5;
@@ -1004,7 +1188,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
     }
     .abtn:hover { background: #1c1c1c; color: #fff; border-color: #555; }
     .abtn.ign:hover { border-color: #c44; color: #e66; }
-    .abtn.str.on { color: #e6c84a; border-color: rgba(230,200,74,.5); background: rgba(230,200,74,.12); }
+    .abtn.str.on { color: #e6c84a; border-color: #555; background: rgba(8,8,8,.82); text-shadow: 0 0 6px rgba(230,200,74,.8); }
     .abtn.str:not(.on):hover { border-color: #e6c84a; color: #e6c84a; }
     .clink { display: block; text-decoration: none; color: inherit; }
     .cimg { height: 165px; overflow: hidden; background: #111; }
@@ -1032,6 +1216,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <body>
 <header>
   <div class="brand">AuctionWatch</div>
+  <a href="/logout" style="margin-left:auto;font-size:.75rem;color:#444;text-decoration:none;white-space:nowrap" onmouseover="this.style.color='#888'" onmouseout="this.style.color='#444'">Sign out</a>
   <form id="sf">
     <input id="q" type="text" placeholder="Search auctions..." autocomplete="off">
     <div class="pills" id="spills">
@@ -1042,6 +1227,8 @@ _WEB_HTML = r"""<!DOCTYPE html>
     </div>
     <div class="pills">
       <div class="pill" data-filter="active">Active only</div>
+      <div class="pill" data-filter="starred">★ Starred</div>
+      <div class="pill" data-filter="ignored">✕ Ignored</div>
     </div>
     <button type="submit" id="search-btn">Search</button>
   </form>
@@ -1053,7 +1240,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <script>
 const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0'};
 const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar'};
-let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set() };
+let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set() };
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
@@ -1069,15 +1256,22 @@ function tlMinutes(tl){
   return m||Infinity;
 }
 
-function isActiveOnly(){ return !!document.querySelector('[data-filter="active"].on'); }
+function isActiveOnly()  { return !!document.querySelector('[data-filter="active"].on');  }
+function isStarredOnly() { return !!document.querySelector('[data-filter="starred"].on'); }
+function isIgnoredOnly() { return !!document.querySelector('[data-filter="ignored"].on'); }
 
 function allListings(){
   const sites = new Set(activeSites());
-  const activeOnly = isActiveOnly();
+  const activeOnly  = isActiveOnly();
+  const starredOnly = isStarredOnly();
+  const ignoredOnly = isIgnoredOnly();
   const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar'};
   let all = ['cab','bat','hagerty','pcar'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
   all = all.filter(l => sites.has(siteKey[l.source]||''));
-  if(activeOnly) all = all.filter(l => { const t=l.time_left||''; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
+  if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
+  if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
+  else            all = all.filter(l => !st.ignored.has(l.short_id));
+  if(starredOnly) all = all.filter(l => st.starred.has(l.short_id));
   return all.sort((a,b)=>tlMinutes(a.time_left)-tlMinutes(b.time_left));
 }
 
@@ -1095,13 +1289,14 @@ function tlHtml(l){
 
 function cardHtml(l, seen){
   const c=SC[l.source]||'#888';
-  const starred=st.starred.has(l.short_id);
+  const starred = st.starred.has(l.short_id);
+  const ignored = st.ignored.has(l.short_id);
   const img=l.image_url
     ? `<img src="${esc(l.image_url)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=noimg>No image</div>'">`
     : '<div class="noimg">No image</div>';
-  return `<div class="card${seen?' seen':''}${starred?' starred':''}" data-id="${l.short_id}">
+  return `<div class="card${seen?' seen':''}${starred?' starred':''}${ignored?' is-ignored':''}" data-id="${l.short_id}">
   <div class="cactions">
-    <button class="abtn ign" onclick="ignCard('${l.short_id}',event)" title="Ignore">✕</button>
+    <button class="abtn ign" onclick="toggleIgnore('${l.short_id}',event)" title="${ignored?'Unignore':'Ignore'}">✕</button>
     <button class="abtn str${starred?' on':''}" onclick="starCard('${l.short_id}',event)" title="Star">★</button>
   </div>
   <a class="clink" href="${esc(l.url)}" target="_blank" rel="noopener">
@@ -1172,6 +1367,7 @@ function doSearch(e){
   es.addEventListener('done',ev=>{
     const d=JSON.parse(ev.data);
     st.serverStart=d.start_id||'';
+    st.ignored=new Set(d.ignored||[]);
     st.lastT=new Date().toLocaleTimeString();
     es.close(); st.es=null;
     document.getElementById('search-btn').disabled=false;
@@ -1180,13 +1376,20 @@ function doSearch(e){
   es.onerror=()=>{ es.close(); st.es=null; document.getElementById('search-btn').disabled=false; };
 }
 
-async function ignCard(id, e){
+async function toggleIgnore(id, e){
   e.preventDefault(); e.stopPropagation();
-  const card=document.querySelector(`.card[data-id="${id}"]`);
-  if(card){ card.classList.add('out'); setTimeout(()=>card.remove(),230); }
-  for(const k of Object.keys(st.bysite)) st.bysite[k]=st.bysite[k].filter(l=>l.short_id!==id);
-  await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
-  render();
+  const nowIgnored = !st.ignored.has(id);
+  if(nowIgnored) st.ignored.add(id); else st.ignored.delete(id);
+  // Card disappears from current view if it no longer matches the filter
+  const willDisappear = isIgnoredOnly() ? !nowIgnored : nowIgnored;
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  if(card && willDisappear){
+    card.classList.add('out');
+    setTimeout(()=>render(), 230);
+  } else {
+    render();
+  }
+  await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,ignored:nowIgnored})});
 }
 
 async function setStart(id, e){
@@ -1210,13 +1413,21 @@ async function starCard(id, e){
 }
 
 document.getElementById('sf').addEventListener('submit', doSearch);
-document.querySelectorAll('.pill').forEach(p=>p.addEventListener('click',()=>{ p.classList.toggle('on'); render(); }));
+document.querySelectorAll('.pill').forEach(p=>p.addEventListener('click',()=>{
+  p.classList.toggle('on');
+  // Starred and Ignored filters are mutually exclusive
+  if(p.dataset.filter==='starred' && p.classList.contains('on'))
+    document.querySelector('[data-filter="ignored"]')?.classList.remove('on');
+  else if(p.dataset.filter==='ignored' && p.classList.contains('on'))
+    document.querySelector('[data-filter="starred"]')?.classList.remove('on');
+  render();
+}));
 
 // Pre-fill from URL param and auto-search
 const initQ=new URLSearchParams(location.search).get('q')||'';
 if(initQ){
   document.getElementById('q').value=initQ;
-  fetch('/api/store').then(r=>r.json()).then(d=>{ st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); doSearch(null); });
+  fetch('/api/store').then(r=>r.json()).then(d=>{ st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); st.ignored=new Set(d.ignored||[]); doSearch(null); });
 }
 </script>
 </body>
@@ -1360,9 +1571,51 @@ def serve_web(initial_query: str = "", port: int = 5173):
 
     app = Flask(__name__)
     app.config["JSON_SORT_KEYS"] = False
+    app.secret_key = _get_secret_key()
+    _init_db()
+
+    def _uid():
+        """Return current user_id from session, or None."""
+        from flask import session as fsession
+        return fsession.get("user_id")
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        from flask import request as freq2, session as fsession, redirect
+        if freq2.method == "POST":
+            uid = _db_check_user(freq2.form.get("username",""), freq2.form.get("password",""))
+            if uid:
+                fsession["user_id"] = uid
+                fsession["username"] = freq2.form.get("username","").strip()
+                return redirect("/")
+            return _LOGIN_HTML.replace("{{error}}", "Invalid username or password")
+        return _LOGIN_HTML.replace("{{error}}", "")
+
+    @app.route("/register", methods=["POST"])
+    def register():
+        from flask import request as freq2, session as fsession, redirect
+        username = freq2.form.get("username", "").strip()
+        password = freq2.form.get("password", "")
+        if not username or not password:
+            return _LOGIN_HTML.replace("{{error}}", "Username and password are required")
+        if _db_create_user(username, password):
+            uid = _db_check_user(username, password)
+            fsession["user_id"] = uid
+            fsession["username"] = username
+            return redirect("/")
+        return _LOGIN_HTML.replace("{{error}}", "Username already taken")
+
+    @app.route("/logout")
+    def logout():
+        from flask import session as fsession, redirect
+        fsession.clear()
+        return redirect("/login")
 
     @app.route("/")
     def index():
+        from flask import redirect
+        if not _uid():
+            return redirect("/login")
         return _WEB_HTML
 
     @app.route("/api/search/stream")
@@ -1370,11 +1623,16 @@ def serve_web(initial_query: str = "", port: int = 5173):
         q       = freq.args.get("q", "").strip()
         sites   = freq.args.getlist("sites") or list(ALL_SITES.keys())
         act_only = freq.args.get("active") == "1"
-        ignored  = store_get_ignored()
-        start_id = store_get_start()
 
         if not q:
             return jsonify({"error": "no query"}), 400
+
+        uid = _uid()
+        if not uid:
+            return jsonify({"error": "not authenticated"}), 401
+
+        ignored  = _db_get_ignored(uid)
+        start_id = _db_get_start(uid)
 
         result_q: queue.Queue = queue.Queue()
 
@@ -1396,7 +1654,6 @@ def serve_web(initial_query: str = "", port: int = 5173):
                     async def _one(i, key, name, scraper_fn):
                         try:
                             listings = await scraper_fn(pages[i], q, False)
-                            listings = [l for l in listings if l.short_id not in ignored]
                             if act_only:
                                 listings = [l for l in listings if l.is_active is not False]
                             result_q.put({"site": key, "listings": [_listing_json(l) for l in listings]})
@@ -1423,7 +1680,7 @@ def serve_web(initial_query: str = "", port: int = 5173):
             while True:
                 item = result_q.get()
                 if item is None:
-                    done = json.dumps({"start_id": start_id, "ignored_count": len(ignored)})
+                    done = json.dumps({"start_id": start_id, "ignored": list(ignored)})
                     yield f"event: done\ndata: {done}\n\n"
                     break
                 yield f"event: site\ndata: {json.dumps(item)}\n\n"
@@ -1436,39 +1693,57 @@ def serve_web(initial_query: str = "", port: int = 5173):
 
     @app.route("/api/ignore", methods=["POST"])
     def api_ignore():
-        lid = (freq.json or {}).get("id", "")
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
+        lid     = (freq.json or {}).get("id", "")
+        ignored = (freq.json or {}).get("ignored", True)
         if lid:
-            store_ignore(lid)
+            _db_set_ignored(uid, lid, ignored)
         return jsonify({"ok": True})
 
     @app.route("/api/start", methods=["POST"])
     def api_start():
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
         lid = (freq.json or {}).get("id", "")
         if lid:
-            store_set_start(lid)
+            _db_set_start(uid, lid)
         return jsonify({"ok": True})
 
     @app.route("/api/star", methods=["POST"])
     def api_star():
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
         lid     = (freq.json or {}).get("id", "")
         starred = (freq.json or {}).get("starred", True)
         if lid:
-            store_set_starred(lid, starred)
+            _db_set_starred(uid, lid, starred)
         return jsonify({"ok": True})
 
     @app.route("/api/store")
     def api_store():
-        return jsonify({"ignored": list(store_get_ignored()), "start": store_get_start(),
-                        "starred": list(store_get_starred())})
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
+        return jsonify({"ignored": list(_db_get_ignored(uid)),
+                        "start":   _db_get_start(uid),
+                        "starred": list(_db_get_starred(uid))})
 
-    url = f"http://127.0.0.1:{port}"
+    # In a server environment (Railway etc.) PORT is set; bind publicly and skip browser open
+    server_port = int(os.environ.get("PORT", port))
+    is_server   = "PORT" in os.environ
+    host        = "0.0.0.0" if is_server else "127.0.0.1"
+
+    url = f"http://{host}:{server_port}"
     if HAS_RICH:
         _console.print(f"\n[bold cyan]AuctionWatch[/bold cyan] → [bold]{url}[/bold]   (Ctrl+C to stop)\n")
     else:
         print(f"\nServing at {url}  (Ctrl+C to stop)")
-    launch_url = url + (f"?q={quote_plus(initial_query)}" if initial_query else "")
-    webbrowser.open(launch_url)
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+
+    if not is_server:
+        launch_url = f"http://127.0.0.1:{server_port}" + (f"?q={quote_plus(initial_query)}" if initial_query else "")
+        webbrowser.open(launch_url)
+
+    app.run(host=host, port=server_port, debug=False, threaded=True)
 
 
 def main():
@@ -1494,8 +1769,8 @@ examples:
         help="Show browser UI and save page HTML dumps for debugging selectors"
     )
     parser.add_argument("--serve", action="store_true", help="Start interactive web UI")
-    parser.add_argument("--port",  type=int, default=5173, metavar="PORT",
-                        help="Port for --serve (default: 5173)")
+    parser.add_argument("--port",  type=int, default=int(os.environ.get("PORT", 5173)), metavar="PORT",
+                        help="Port for --serve (default: 5173, or $PORT env var)")
     parser.add_argument(
         "--ignore", metavar="ID",
         help="Permanently hide listing with this 4-char ID from future results"
