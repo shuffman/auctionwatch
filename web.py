@@ -1,0 +1,800 @@
+import asyncio
+import json
+import os
+import queue
+import sys
+import threading
+import webbrowser
+from urllib.parse import quote_plus
+
+try:
+    from playwright.async_api import async_playwright
+except ImportError:
+    print("Error: playwright not installed.")
+    print("Run: pip install playwright && playwright install chromium")
+    sys.exit(1)
+
+from models import SOURCE_COLORS_HTML
+from store import (
+    _get_secret_key, _init_db,
+    _db_check_user, _db_create_user,
+    _db_get_ignored, _db_set_ignored,
+    _db_get_starred, _db_set_starred,
+    _db_get_start, _db_set_start,
+)
+from scrapers import HAS_RICH, _console
+
+
+_LOGIN_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AuctionWatch — Sign in</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           background: #0d0d0d; color: #e0e0e0; display: flex; align-items: center;
+           justify-content: center; min-height: 100vh; }
+    .box { width: 340px; background: #141414; border: 1px solid #222; border-radius: 12px; padding: 2rem; }
+    .brand { font-size: 1.2rem; font-weight: 700; color: #00bcd4; text-align: center; margin-bottom: 1.75rem; }
+    .tabs { display: flex; border-bottom: 1px solid #222; margin-bottom: 1.5rem; }
+    .tab { flex: 1; text-align: center; padding: .55rem; font-size: .85rem; cursor: pointer;
+           color: #555; border-bottom: 2px solid transparent; transition: all .15s; }
+    .tab.on { color: #e0e0e0; border-bottom-color: #00bcd4; }
+    .form-section { display: none; }
+    .form-section.on { display: block; }
+    label { display: block; font-size: .78rem; color: #888; margin-bottom: .3rem; }
+    input[type=text], input[type=password] {
+      width: 100%; background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
+      padding: .5rem .75rem; color: #e0e0e0; font-size: .9rem; outline: none; margin-bottom: 1rem;
+    }
+    input:focus { border-color: #00bcd4; }
+    button[type=submit] {
+      width: 100%; background: #00bcd4; border: none; border-radius: 6px;
+      padding: .55rem; color: #000; font-weight: 700; font-size: .9rem; cursor: pointer;
+    }
+    button[type=submit]:hover { background: #26c6da; }
+    .error { color: #ff5252; font-size: .78rem; margin-bottom: .9rem; min-height: 1.1rem; }
+  </style>
+</head>
+<body>
+<div class="box">
+  <div class="brand">AuctionWatch</div>
+  <div class="tabs">
+    <div class="tab on" id="t-login" onclick="show('login')">Sign in</div>
+    <div class="tab"    id="t-reg"   onclick="show('reg')">Create account</div>
+  </div>
+  <div class="error" id="err">{{error}}</div>
+
+  <div class="form-section on" id="s-login">
+    <form method="post" action="/login">
+      <label>Username</label>
+      <input type="text" name="username" autocomplete="username" autofocus required>
+      <label>Password</label>
+      <input type="password" name="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+
+  <div class="form-section" id="s-reg">
+    <form method="post" action="/register">
+      <label>Username</label>
+      <input type="text" name="username" autocomplete="username" required>
+      <label>Password</label>
+      <input type="password" name="password" autocomplete="new-password" required>
+      <button type="submit">Create account</button>
+    </form>
+  </div>
+</div>
+<script>
+function show(tab){
+  document.getElementById('s-login').classList.toggle('on', tab==='login');
+  document.getElementById('s-reg').classList.toggle('on',   tab==='reg');
+  document.getElementById('t-login').classList.toggle('on', tab==='login');
+  document.getElementById('t-reg').classList.toggle('on',   tab==='reg');
+}
+// If server flagged a register error, show that tab
+if(document.getElementById('err').textContent.includes('taken')) show('reg');
+</script>
+</body>
+</html>"""
+
+_WEB_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AuctionWatch</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+    :root {
+      --bg: #0d0d0d; --bg2: #141414; --bg3: #1a1a1a;
+      --border: #252525; --text: #e0e0e0; --dim: #555;
+      --green: #00e676; --red: #ff5252; --yellow: #e6c84a; --accent: #00bcd4;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           background: var(--bg); color: var(--text); }
+    header {
+      background: var(--bg2); border-bottom: 1px solid #222;
+      padding: 0.9rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    }
+    .brand { font-size: 1.1rem; font-weight: 700; color: var(--accent); white-space: nowrap; }
+    #sf { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; flex: 1; }
+    #q {
+      flex: 1; min-width: 180px; background: #1e1e1e; border: 1px solid #333;
+      border-radius: 6px; padding: 0.42rem 0.75rem; color: var(--text); font-size: 0.9rem; outline: none;
+    }
+    #q:focus { border-color: var(--accent); }
+    .pills { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+    .pill {
+      padding: 0.28rem 0.6rem; border-radius: 20px; font-size: 0.73rem; font-weight: 600;
+      border: 1px solid #333; color: var(--dim); cursor: pointer; user-select: none; transition: all 0.15s;
+    }
+    .pill.on { color: #fff; }
+    .pill[data-site="cab"].on  { color: #00bcd4; border-color: #00bcd4; }
+    .pill[data-site="bat"].on  { color: #4caf50; border-color: #4caf50; }
+    .pill[data-site="hagerty"].on { color: #2196f3; border-color: #2196f3; }
+    .pill[data-site="pcar"].on { color: #9c27b0; border-color: #9c27b0; }
+    .pill[data-site].prohibit { color: var(--red); border-color: rgba(255,82,82,0.45); }
+    .pill[data-filter="active"].on  { color: var(--green);  border-color: var(--green); }
+    .pill[data-filter="starred"].on { color: var(--yellow); border-color: var(--yellow); }
+    .pill[data-filter="ignored"].on { color: var(--red);    border-color: var(--red); }
+    #search-btn {
+      padding: 0.38rem 1rem; background: var(--accent); border: none; border-radius: 6px;
+      color: #000; font-weight: 700; font-size: 0.85rem; cursor: pointer; white-space: nowrap;
+    }
+    #search-btn:hover { background: #26c6da; }
+    #search-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    #statusbar {
+      padding: 0.45rem 1.5rem; background: var(--bg2); border-bottom: 1px solid #1e1e1e;
+      font-size: 0.78rem; color: var(--dim); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    }
+    .sc { color: var(--text); font-weight: 600; }
+    .nb { background: rgba(0,230,118,0.15); color: var(--green); padding: 0.08rem 0.38rem; border-radius: 4px; font-weight: 700; }
+    #site-status { display: flex; gap: 0.6rem; flex-wrap: wrap; padding: 0.75rem 1.5rem; min-height: 2.5rem; }
+    .spill {
+      display: flex; align-items: center; gap: 0.35rem; padding: 0.28rem 0.6rem;
+      border-radius: 20px; font-size: 0.72rem; font-weight: 600; border: 1px solid #2a2a2a; color: var(--dim);
+      transition: all 0.2s;
+    }
+    .spill.loading { animation: pulse 1.2s infinite; }
+    .spill.done   { color: var(--green); border-color: rgba(0,230,118,0.35); }
+    .spill.error  { color: var(--red);   border-color: rgba(255,82,82,0.35); }
+    .spin { width: 9px; height: 9px; border: 2px solid #333; border-top-color: currentColor;
+            border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin  { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 1rem; padding: 1.25rem 1.5rem; }
+    .seen-div {
+      grid-column: 1/-1; display: flex; align-items: center; gap: 0.6rem;
+      color: #2e2e2e; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; padding: 0.1rem 0;
+    }
+    .seen-div::before, .seen-div::after { content:''; flex:1; border-top: 1px solid #202020; }
+    .card {
+      background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
+      overflow: hidden; transition: transform .15s, box-shadow .15s, border-color .15s, opacity .15s;
+      position: relative;
+    }
+    .card:hover { transform: translateY(-3px); box-shadow: 0 10px 28px rgba(0,0,0,.55); border-color: #333; }
+    .card.seen { opacity: 0.38; }
+    .card.seen:hover { opacity: 0.72; }
+    .card.out { animation: fadeout .22s ease forwards; pointer-events: none; }
+    .card.starred { border-color: rgba(230,200,74,.45); }
+    .card.starred:hover { border-color: rgba(230,200,74,.75); box-shadow: 0 10px 28px rgba(230,200,74,.1); }
+    .card.is-ignored { opacity: 0.55; }
+    .card.is-ignored:hover { opacity: 0.85; }
+    .card.is-ignored .abtn.ign:hover { border-color: #4a4; color: #6c6; }
+    @keyframes fadeout { to { opacity:0; transform:scale(.93); } }
+    .cactions {
+      position: absolute; top: 7px; right: 7px; display: flex; gap: 5px; z-index: 5;
+    }
+    .abtn {
+      width: 26px; height: 26px; background: rgba(8,8,8,.82); border: 1px solid #3a3a3a;
+      border-radius: 50%; color: #555; cursor: pointer; font-size: 0.8rem;
+      display: flex; align-items: center; justify-content: center;
+      transition: all .1s; padding: 0;
+    }
+    .abtn:hover { background: #1c1c1c; color: #fff; border-color: #555; }
+    .abtn.ign:hover { border-color: #c44; color: #e66; }
+    .abtn.str.on { color: #e6c84a; border-color: #555; background: rgba(8,8,8,.82); text-shadow: 0 0 6px rgba(230,200,74,.8); }
+    .abtn.str:not(.on):hover { border-color: #e6c84a; color: #e6c84a; }
+    .clink { display: block; text-decoration: none; color: inherit; }
+    .cimg { height: 165px; overflow: hidden; background: #111; }
+    .cimg img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s; }
+    .card:hover .cimg img { transform: scale(1.04); }
+    .noimg { height: 100%; display: flex; align-items: center; justify-content: center;
+             color: #222; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+    .cbody { padding: .75rem .85rem .85rem; }
+    .cmeta { display: flex; align-items: center; gap: .35rem; margin-bottom: .4rem; flex-wrap: wrap; }
+    .sbadge { padding: .13rem .42rem; border-radius: 4px; font-size: .63rem; font-weight: 700;
+              text-transform: uppercase; letter-spacing: .06em; color: #fff; }
+    .lid { font-family: monospace; font-size: .65rem; color: var(--yellow);
+           background: rgba(230,200,74,.1); border: 1px solid rgba(230,200,74,.2);
+           border-radius: 3px; padding: .08rem .32rem; }
+    .ctitle { font-size: .88rem; font-weight: 600; color: #f0f0f0; line-height: 1.35; margin-bottom: .3rem; }
+    .cprice { display: block; font-size: 1.02rem; font-weight: 700; color: var(--green); margin-bottom: .18rem; }
+    .tl { display: inline-block; font-size: .72rem; font-weight: 600;
+          padding: .1rem .38rem; border-radius: 4px; margin-top: .12rem; }
+    .tl.active { background: rgba(0,230,118,.14); color: var(--green); }
+    .tl.ended  { background: rgba(255,82,82,.1);  color: #4a4a4a; }
+    .empty { grid-column:1/-1; text-align:center; color:#2e2e2e; padding:4rem; font-size:.95rem; }
+    #tag-bar {
+      padding: 0.45rem 1.5rem; border-bottom: 1px solid #1a1a1a;
+      display: none; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+    }
+    .tpill {
+      padding: 0.22rem 0.6rem; border-radius: 20px; font-size: 0.7rem; font-weight: 600;
+      border: 1px solid #252525; color: #3a3a3a; cursor: pointer; user-select: none;
+      transition: all 0.12s;
+    }
+    .tpill:hover { border-color: #444; color: #666; }
+    .tpill.require { color: var(--green); border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
+    .tpill.prohibit { color: var(--red);   border-color: rgba(255,82,82,0.45);  background: rgba(255,82,82,0.07); }
+    @media(max-width:600px) { .grid{padding:1rem;gap:.8rem} header{padding:.7rem 1rem} }
+    .range-row {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.72rem; color: var(--dim); white-space: nowrap;
+    }
+    .range-row label { color: #666; }
+    .range-row input[type=number] {
+      width: 68px; background: #1e1e1e; border: 1px solid #333; border-radius: 5px;
+      padding: 0.28rem 0.45rem; color: var(--text); font-size: 0.72rem; outline: none;
+    }
+    .range-row input[type=number]:focus { border-color: var(--accent); }
+    .range-row input[type=number]::-webkit-inner-spin-button,
+    .range-row input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    .range-row input[type=number] { -moz-appearance: textfield; }
+    .range-sep { color: #333; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand">AuctionWatch</div>
+  <a href="/logout" style="margin-left:auto;font-size:.75rem;color:#444;text-decoration:none;white-space:nowrap" onmouseover="this.style.color='#888'" onmouseout="this.style.color='#444'">Sign out</a>
+  <form id="sf">
+    <input id="q" type="text" placeholder="Search auctions..." autocomplete="off">
+    <div class="pills" id="spills">
+      <div class="pill on" data-site="cab" data-label="C&amp;B">C&amp;B</div>
+      <div class="pill on" data-site="bat" data-label="BaT">BaT</div>
+      <div class="pill on" data-site="hagerty" data-label="Hagerty">Hagerty</div>
+      <div class="pill on" data-site="pcar" data-label="PCar">PCar</div>
+    </div>
+    <div class="pills">
+      <div class="pill on" data-filter="active">Active only</div>
+      <div class="pill" data-filter="starred">★ Starred</div>
+      <div class="pill" data-filter="ignored">✕ Ignored</div>
+    </div>
+    <div class="range-row">
+      <label>Year</label>
+      <input type="number" id="year-lo" placeholder="Min" min="1900" max="2030" step="1">
+      <span class="range-sep">–</span>
+      <input type="number" id="year-hi" placeholder="Max" min="1900" max="2030" step="1">
+    </div>
+    <div class="range-row">
+      <label>Price $</label>
+      <input type="number" id="price-lo" placeholder="Min" min="0" step="500">
+      <span class="range-sep">–</span>
+      <input type="number" id="price-hi" placeholder="Max" min="0" step="500">
+    </div>
+    <button type="submit" id="search-btn">Search</button>
+  </form>
+</header>
+<div id="statusbar">Ready — enter a search query above</div>
+<div id="site-status"></div>
+<div id="tag-bar"></div>
+<div class="grid" id="grid"></div>
+
+<script>
+const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0'};
+const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar'};
+let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set(), tagState:new Map() };
+
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+
+function activeSites(){ return [...document.querySelectorAll('#spills .pill')].filter(p=>!p.classList.contains('prohibit')).map(p=>p.dataset.site) }
+
+function tlMinutes(tl){
+  const t=(tl||'').trim();
+  if(!t||/ended|sold|closed/i.test(t)) return Infinity;
+  let m=0;
+  const d=t.match(/(\d+)\s*D/i); if(d) m+=parseInt(d[1])*1440;
+  const h=t.match(/(\d+)\s*H/i); if(h) m+=parseInt(h[1])*60;
+  const mn=t.match(/(\d+)\s*M/i); if(mn) m+=parseInt(mn[1]);
+  if(!m){
+    // HH:MM:SS format (C&B, BaT)
+    const ts=t.match(/(\d+):(\d{2}):\d{2}/);
+    if(ts) m=parseInt(ts[1])*60+parseInt(ts[2]);
+  }
+  return m||Infinity;
+}
+
+function isActiveOnly()  { return !!document.querySelector('[data-filter="active"].on');  }
+function isStarredOnly() { return !!document.querySelector('[data-filter="starred"].on'); }
+function isIgnoredOnly() { return !!document.querySelector('[data-filter="ignored"].on'); }
+
+function extractYear(title) {
+  const m = title.match(/\b(19[0-9]{2}|20[0-2][0-9])\b/);
+  return m ? parseInt(m[1]) : null;
+}
+
+function parsePrice(priceStr) {
+  if(!priceStr) return null;
+  const n = parseInt(priceStr.replace(/[^0-9]/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+['year-lo','year-hi','price-lo','price-hi'].forEach(id => {
+  document.getElementById(id).addEventListener('input', render);
+});
+
+const STOP = new Set([
+  'a','an','the','and','or','with','for','in','on','at','by','to','of','is','as','no','not',
+  'its','this','that','are','was','has','had','been','will','but','via','my','our','your',
+  'their','all','both','each','from','into','over','than','then','when','where','which',
+  'who','how','why','what','one','two','three','per','sale','auction','reserve','bid',
+  'car','auto','vehicle','used','new','amp','very','only','just','also','well','great',
+  'nice','good','clean','rare','low','high','long','time','see','more','less',
+]);
+
+function tokenizeTitle(title) {
+  return [...new Set(
+    title.split(/[\s\/,.()\[\]&+#@!?:;'"]+/)
+      .map(t => t.toLowerCase().replace(/[^a-z0-9-]/g, ''))
+      .filter(t => t.length >= 2)
+      .filter(t => !/^(19|20)\d{2}$/.test(t))
+      .filter(t => !STOP.has(t))
+  )];
+}
+
+function buildTagCounts() {
+  const counts = new Map();
+  for(const l of Object.values(st.bysite).flat().filter(l=>!st.ignored.has(l.short_id))) {
+    for(const t of tokenizeTitle(l.title)) counts.set(t, (counts.get(t)||0) + 1);
+  }
+  return counts;
+}
+
+function renderTagBar() {
+  const all = Object.values(st.bysite).flat();
+  const bar = document.getElementById('tag-bar');
+  if(all.length < 2) { bar.style.display='none'; return; }
+  const counts = buildTagCounts();
+  const tags = [...counts.entries()]
+    .filter(([,n]) => n >= 2 && n < all.length)
+    .sort((a,b) => b[1]-a[1])
+    .slice(0, 35)
+    .map(([t]) => t);
+  if(!tags.length) { bar.style.display='none'; return; }
+  bar.style.display = 'flex';
+  bar.innerHTML = tags.map(t => {
+    const s = st.tagState.get(t)||null;
+    const cls = s ? ' '+s : '';
+    const suffix = s==='require' ? ' ✓' : s==='prohibit' ? ' ✕' : '';
+    return `<span class="tpill${cls}" data-tag="${esc(t)}">${esc(t)}${suffix}</span>`;
+  }).join('');
+}
+
+document.getElementById('tag-bar').addEventListener('click', e => {
+  const pill = e.target.closest('.tpill');
+  if(!pill) return;
+  const tag = pill.dataset.tag;
+  const cur = st.tagState.get(tag)||null;
+  const next = cur===null ? 'require' : cur==='require' ? 'prohibit' : null;
+  if(next===null) st.tagState.delete(tag); else st.tagState.set(tag, next);
+  renderTagBar();
+  render();
+});
+
+function allListings(){
+  const activeOnly  = isActiveOnly();
+  const starredOnly = isStarredOnly();
+  const ignoredOnly = isIgnoredOnly();
+  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar'};
+  const reqSites  = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
+  const probSites = new Set([...document.querySelectorAll('#spills .pill.prohibit')].map(p=>p.dataset.site));
+  let all = ['cab','bat','hagerty','pcar'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
+  all = all.filter(l => {
+    const k = siteKey[l.source]||'';
+    if(probSites.has(k)) return false;
+    if(reqSites.size > 0 && !reqSites.has(k)) return false;
+    return true;
+  });
+  if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
+  if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
+  else            all = all.filter(l => !st.ignored.has(l.short_id));
+  if(starredOnly) all = all.filter(l => st.starred.has(l.short_id));
+  // Year filter
+  const yloV = document.getElementById('year-lo').value;
+  const yhiV = document.getElementById('year-hi').value;
+  if(yloV || yhiV) {
+    all = all.filter(l => {
+      const y = extractYear(l.title); if(y===null) return true;
+      if(yloV && y < parseInt(yloV)) return false;
+      if(yhiV && y > parseInt(yhiV)) return false;
+      return true;
+    });
+  }
+  // Price filter
+  const ploV = document.getElementById('price-lo').value;
+  const phiV = document.getElementById('price-hi').value;
+  if(ploV || phiV) {
+    all = all.filter(l => {
+      const p = parsePrice(l.price); if(p===null) return true;
+      if(ploV && p < parseInt(ploV)) return false;
+      if(phiV && p > parseInt(phiV)) return false;
+      return true;
+    });
+  }
+  // Tag filters
+  for(const [tag, state] of st.tagState) {
+    const re = new RegExp('\\b' + tag.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\b', 'i');
+    if(state==='require')  all = all.filter(l => re.test(l.title));
+    if(state==='prohibit') all = all.filter(l => !re.test(l.title));
+  }
+  return all.sort((a,b)=>tlMinutes(a.time_left)-tlMinutes(b.time_left));
+}
+
+function startIdx(listings){
+  if(!st.serverStart) return null;
+  const i = listings.findIndex(l=>l.short_id===st.serverStart);
+  return i>=0 ? i : null;
+}
+
+function tlHtml(l){
+  if(!l.time_left) return '';
+  const t=l.time_left.toLowerCase(), cls=/ended|sold|closed/.test(t)?'ended':/\d/.test(t)?'active':'';
+  return cls ? `<span class="tl ${cls}">${esc(l.time_left)}</span>` : '';
+}
+
+function cardHtml(l, seen){
+  const c=SC[l.source]||'#888';
+  const starred = st.starred.has(l.short_id);
+  const ignored = st.ignored.has(l.short_id);
+  const img=l.image_url
+    ? `<img src="${esc(l.image_url)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=noimg>No image</div>'">`
+    : '<div class="noimg">No image</div>';
+  return `<div class="card${seen?' seen':''}${starred?' starred':''}${ignored?' is-ignored':''}" data-id="${l.short_id}">
+  <div class="cactions">
+    <button class="abtn ign" onclick="toggleIgnore('${l.short_id}',event)" title="${ignored?'Unignore':'Ignore'}">✕</button>
+    <button class="abtn str${starred?' on':''}" onclick="starCard('${l.short_id}',event)" title="Star">★</button>
+  </div>
+  <a class="clink" href="${esc(l.url)}" target="_blank" rel="noopener">
+    <div class="cimg">${img}</div>
+    <div class="cbody">
+      <div class="cmeta">
+        <span class="lid">${l.short_id}</span>
+        <span class="sbadge" style="background:${c}">${esc(l.source)}</span>
+      </div>
+      <div class="ctitle">${esc(l.title)}</div>
+      ${l.price?`<span class="cprice">${esc(l.price)}</span>`:''}
+      ${tlHtml(l)}
+    </div>
+  </a>
+</div>`;
+}
+
+function render(){
+  const listings = allListings();
+  const si = startIdx(listings);
+  const grid = document.getElementById('grid');
+  if(!listings.length){ grid.innerHTML=''; return; }
+  let html='';
+  for(let i=0;i<listings.length;i++){
+    if(si!==null && i===si) html+='<div class="seen-div"><span>seen below</span></div>';
+    html+=cardHtml(listings[i], si!==null && i>=si);
+  }
+  grid.innerHTML=html;
+  const newN = si!==null ? si : listings.length;
+  const bar = document.getElementById('statusbar');
+  bar.innerHTML = `<span class="sc">${listings.length} result${listings.length!==1?'s':''}</span>`
+    + (si!==null ? ` <span class="nb">${newN} new</span>` : '')
+    + (st.lastQ ? ` &nbsp;for <em>"${esc(st.lastQ)}"</em>` : '')
+    + (st.lastT ? ` &nbsp;&middot; ${st.lastT}` : '');
+}
+
+function setSitePill(site, cls, text){
+  const ss=document.getElementById('site-status');
+  let el=ss.querySelector(`[data-s="${site}"]`);
+  if(!el){ el=document.createElement('div'); el.dataset.s=site; ss.appendChild(el); }
+  el.className=`spill ${cls}`;
+  el.innerHTML=cls==='loading'?`<div class="spin"></div> ${text}`:text;
+}
+
+function doSearch(e){
+  if(e) e.preventDefault();
+  const q=document.getElementById('q').value.trim();
+  if(!q) return;
+  const sites=activeSites();
+  if(!sites.length) return;
+  if(st.es){ st.es.close(); st.es=null; }
+  st.bysite={}; st.lastQ=q; st.lastT=''; st.tagState=new Map();
+  document.getElementById('search-btn').disabled=true;
+  document.getElementById('grid').innerHTML='';
+  document.getElementById('site-status').innerHTML='';
+  document.getElementById('tag-bar').style.display='none';
+  const activeOnly=!!document.querySelector('[data-filter="active"].on');
+  const sp=sites.map(s=>`sites=${encodeURIComponent(s)}`).join('&');
+  const url=`/api/search/stream?q=${encodeURIComponent(q)}&${sp}${activeOnly?'&active=1':''}`;
+  sites.forEach(s=>setSitePill(s,'loading',SN[s]));
+  const es=new EventSource(url);
+  st.es=es;
+  es.addEventListener('site',ev=>{
+    const d=JSON.parse(ev.data);
+    st.bysite[d.site]=d.listings||[];
+    setSitePill(d.site, d.error?'error':'done', (d.error?'✕ ': d.listings.length+' · ')+SN[d.site]);
+    renderTagBar();
+    render();
+  });
+  es.addEventListener('done',ev=>{
+    const d=JSON.parse(ev.data);
+    st.serverStart=d.start_id||'';
+    st.ignored=new Set(d.ignored||[]);
+    st.lastT=new Date().toLocaleTimeString();
+    es.close(); st.es=null;
+    document.getElementById('search-btn').disabled=false;
+    renderTagBar();
+    render();
+  });
+  es.onerror=()=>{ es.close(); st.es=null; document.getElementById('search-btn').disabled=false; };
+}
+
+async function toggleIgnore(id, e){
+  e.preventDefault(); e.stopPropagation();
+  const nowIgnored = !st.ignored.has(id);
+  if(nowIgnored) st.ignored.add(id); else st.ignored.delete(id);
+  // Card disappears from current view if it no longer matches the filter
+  const willDisappear = isIgnoredOnly() ? !nowIgnored : nowIgnored;
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  if(card && willDisappear){
+    card.classList.add('out');
+    setTimeout(()=>render(), 230);
+  } else {
+    render();
+  }
+  await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,ignored:nowIgnored})});
+}
+
+async function setStart(id, e){
+  e.preventDefault(); e.stopPropagation();
+  st.serverStart=id;
+  await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  render();
+}
+
+async function starCard(id, e){
+  e.preventDefault(); e.stopPropagation();
+  const nowStarred = !st.starred.has(id);
+  if(nowStarred) st.starred.add(id); else st.starred.delete(id);
+  const card=document.querySelector(`.card[data-id="${id}"]`);
+  if(card){
+    card.classList.toggle('starred', nowStarred);
+    const btn=card.querySelector('.abtn.str');
+    if(btn) btn.classList.toggle('on', nowStarred);
+  }
+  await fetch('/api/star',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,starred:nowStarred})});
+}
+
+document.getElementById('sf').addEventListener('submit', doSearch);
+
+// Site pills: three-state cycle require(.on) → neutral → prohibit → require
+document.querySelectorAll('#spills .pill').forEach(p=>p.addEventListener('click',()=>{
+  const cur = p.classList.contains('on') ? 'require' : p.classList.contains('prohibit') ? 'prohibit' : 'neutral';
+  const next = cur==='require' ? 'neutral' : cur==='neutral' ? 'prohibit' : 'require';
+  p.classList.remove('on','prohibit');
+  if(next==='require') p.classList.add('on');
+  if(next==='prohibit') p.classList.add('prohibit');
+  p.textContent = p.dataset.label + (next==='require' ? ' ✓' : next==='prohibit' ? ' ✕' : '');
+  render();
+}));
+
+// Filter pills: simple toggle
+document.querySelectorAll('.pill[data-filter]').forEach(p=>p.addEventListener('click',()=>{
+  p.classList.toggle('on');
+  // Starred and Ignored are mutually exclusive
+  if(p.dataset.filter==='starred' && p.classList.contains('on'))
+    document.querySelector('[data-filter="ignored"]')?.classList.remove('on');
+  else if(p.dataset.filter==='ignored' && p.classList.contains('on'))
+    document.querySelector('[data-filter="starred"]')?.classList.remove('on');
+  render();
+}));
+
+// Always pre-load ignored/starred so they're available before the first search completes
+const initQ=new URLSearchParams(location.search).get('q')||'';
+fetch('/api/store').then(r=>r.json()).then(d=>{
+  st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); st.ignored=new Set(d.ignored||[]);
+  if(initQ){ document.getElementById('q').value=initQ; doSearch(null); }
+});
+</script>
+</body>
+</html>
+"""
+
+
+def serve_web(initial_query: str = "", port: int = 5173):
+    try:
+        from flask import Flask, Response, request as freq, jsonify
+    except ImportError:
+        if HAS_RICH:
+            _console.print("flask not installed — run: pip install flask", style="red bold")
+        else:
+            print("  [ERROR] flask not installed — run: pip install flask", file=sys.stderr)
+        sys.exit(1)
+
+    from auctionwatch import ALL_SITES, _listing_json
+
+    app = Flask(__name__)
+    app.config["JSON_SORT_KEYS"] = False
+    app.secret_key = _get_secret_key()
+    _init_db()
+
+    def _uid():
+        """Return current user_id from session, or None."""
+        from flask import session as fsession
+        return fsession.get("user_id")
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        from flask import request as freq2, session as fsession, redirect
+        if freq2.method == "POST":
+            uid = _db_check_user(freq2.form.get("username",""), freq2.form.get("password",""))
+            if uid:
+                fsession["user_id"] = uid
+                fsession["username"] = freq2.form.get("username","").strip()
+                return redirect("/")
+            return _LOGIN_HTML.replace("{{error}}", "Invalid username or password")
+        return _LOGIN_HTML.replace("{{error}}", "")
+
+    @app.route("/register", methods=["POST"])
+    def register():
+        from flask import request as freq2, session as fsession, redirect
+        username = freq2.form.get("username", "").strip()
+        password = freq2.form.get("password", "")
+        if not username or not password:
+            return _LOGIN_HTML.replace("{{error}}", "Username and password are required")
+        if _db_create_user(username, password):
+            uid = _db_check_user(username, password)
+            fsession["user_id"] = uid
+            fsession["username"] = username
+            return redirect("/")
+        return _LOGIN_HTML.replace("{{error}}", "Username already taken")
+
+    @app.route("/logout")
+    def logout():
+        from flask import session as fsession, redirect
+        fsession.clear()
+        return redirect("/login")
+
+    @app.route("/")
+    def index():
+        from flask import redirect
+        if not _uid():
+            return redirect("/login")
+        return _WEB_HTML
+
+    @app.route("/api/search/stream")
+    def search_stream():
+        q       = freq.args.get("q", "").strip()
+        sites   = freq.args.getlist("sites") or list(ALL_SITES.keys())
+        act_only = freq.args.get("active") == "1"
+
+        if not q:
+            return jsonify({"error": "no query"}), 400
+
+        uid = _uid()
+        if not uid:
+            return jsonify({"error": "not authenticated"}), 401
+
+        ignored  = _db_get_ignored(uid)
+        start_id = _db_get_start(uid)
+
+        result_q: queue.Queue = queue.Queue()
+
+        def _run():
+            async def _scrape():
+                active = {k: v for k, v in ALL_SITES.items() if k in sites}
+                async with async_playwright() as pw:
+                    browser = await pw.chromium.launch(headless=True)
+                    ctx = await browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/122.0.0.0 Safari/537.36"
+                        ),
+                        viewport={"width": 1280, "height": 900},
+                    )
+                    pages = await asyncio.gather(*[ctx.new_page() for _ in active])
+
+                    async def _one(i, key, name, scraper_fn):
+                        try:
+                            listings = await scraper_fn(pages[i], q, False)
+                            if act_only:
+                                listings = [l for l in listings if l.is_active is not False]
+                            result_q.put({"site": key, "listings": [_listing_json(l) for l in listings]})
+                        except Exception as exc:
+                            result_q.put({"site": key, "listings": [], "error": str(exc)})
+
+                    await asyncio.gather(*[
+                        _one(i, k, name, fn)
+                        for i, (k, (name, _, fn)) in enumerate(active.items())
+                    ])
+                    await browser.close()
+                result_q.put(None)
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_scrape())
+            finally:
+                loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+        def _generate():
+            while True:
+                item = result_q.get()
+                if item is None:
+                    done = json.dumps({"start_id": start_id, "ignored": list(ignored)})
+                    yield f"event: done\ndata: {done}\n\n"
+                    break
+                yield f"event: site\ndata: {json.dumps(item)}\n\n"
+
+        return Response(
+            _generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.route("/api/ignore", methods=["POST"])
+    def api_ignore():
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
+        lid     = (freq.json or {}).get("id", "")
+        ignored = (freq.json or {}).get("ignored", True)
+        if lid:
+            _db_set_ignored(uid, lid, ignored)
+        return jsonify({"ok": True})
+
+    @app.route("/api/start", methods=["POST"])
+    def api_start():
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
+        lid = (freq.json or {}).get("id", "")
+        if lid:
+            _db_set_start(uid, lid)
+        return jsonify({"ok": True})
+
+    @app.route("/api/star", methods=["POST"])
+    def api_star():
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
+        lid     = (freq.json or {}).get("id", "")
+        starred = (freq.json or {}).get("starred", True)
+        if lid:
+            _db_set_starred(uid, lid, starred)
+        return jsonify({"ok": True})
+
+    @app.route("/api/store")
+    def api_store():
+        uid = _uid()
+        if not uid: return jsonify({"error": "not authenticated"}), 401
+        return jsonify({"ignored": list(_db_get_ignored(uid)),
+                        "start":   _db_get_start(uid),
+                        "starred": list(_db_get_starred(uid))})
+
+    # In a server environment (Railway etc.) PORT is set; bind publicly and skip browser open
+    server_port = int(os.environ.get("PORT", port))
+    is_server   = "PORT" in os.environ
+    host        = "0.0.0.0" if is_server else "127.0.0.1"
+
+    url = f"http://{host}:{server_port}"
+    if HAS_RICH:
+        _console.print(f"\n[bold cyan]AuctionWatch[/bold cyan] → [bold]{url}[/bold]   (Ctrl+C to stop)\n")
+    else:
+        print(f"\nServing at {url}  (Ctrl+C to stop)")
+
+    if not is_server:
+        launch_url = f"http://127.0.0.1:{server_port}" + (f"?q={quote_plus(initial_query)}" if initial_query else "")
+        webbrowser.open(launch_url)
+
+    app.run(host=host, port=server_port, debug=False, threaded=True)

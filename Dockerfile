@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir playwright rich flask \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY auctionwatch.py .
+COPY *.py .
 
 # Persistent data (SQLite DB + secret key) lives here.
 # Mount a Railway volume at /data so it survives redeploys.
