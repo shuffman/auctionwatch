@@ -681,18 +681,31 @@ async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list
 
         _ingest(api_data.get("results", []))
 
-        # Follow pagination via the 'next' API URL using the browser's fetch
-        # (inherits session cookies automatically)
-        next_url = api_data.get("next")
-        while next_url:
+        # Paginate by clicking Next and waiting for __PRELOADED_AUCTIONS_LIST__ to update
+        while True:
+            next_btn = await page.query_selector('button.pcar-pagination__nav[aria-label="Next page"]')
+            if not next_btn or await next_btn.get_attribute("disabled") is not None:
+                break
+            prev_content = await page.evaluate(
+                '() => document.getElementById("__PRELOADED_AUCTIONS_LIST__")?.textContent || ""'
+            )
+            await next_btn.click()
+            try:
+                await page.wait_for_function(
+                    '(prev) => { const el = document.getElementById("__PRELOADED_AUCTIONS_LIST__"); '
+                    'return el && el.textContent !== prev; }',
+                    arg=prev_content,
+                    timeout=8000,
+                )
+            except PlaywrightTimeout:
+                break
             api_data = await page.evaluate(
-                f'async () => {{ const r = await fetch({json.dumps(next_url)},'
-                f' {{credentials:"include"}}); return r.json(); }}'
+                '() => { const el = document.getElementById("__PRELOADED_AUCTIONS_LIST__"); '
+                'return el ? JSON.parse(el.textContent) : null; }'
             )
             if not api_data:
                 break
             _ingest(api_data.get("results", []))
-            next_url = api_data.get("next")
 
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out waiting for listings", "warning")
