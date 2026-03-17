@@ -511,7 +511,15 @@ async def scrape_carsandbids(page: Page, query: str, debug: bool = False) -> lis
         if debug:
             _save_debug(await page.content(), "carsandbids")
 
-        await _scroll_to_bottom(page)
+        # Click "Load More" until exhausted, scrolling between clicks to trigger lazy loads
+        while True:
+            await _scroll_to_bottom(page)
+            btn = await page.query_selector('button:has-text("Load More"), button:has-text("Show More"), a:has-text("Load More")')
+            if not btn:
+                break
+            await btn.click()
+            await page.wait_for_timeout(1500)
+
         for item in (await _eval_listings(page, 'a[href*="/auctions/"]')):
             url = item.get("url", "")
             if not url:
