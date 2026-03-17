@@ -1210,6 +1210,18 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .tl.active { background: rgba(0,230,118,.14); color: var(--green); }
     .tl.ended  { background: rgba(255,82,82,.1);  color: #4a4a4a; }
     .empty { grid-column:1/-1; text-align:center; color:#2e2e2e; padding:4rem; font-size:.95rem; }
+    #tag-bar {
+      padding: 0.45rem 1.5rem; border-bottom: 1px solid #1a1a1a;
+      display: none; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+    }
+    .tpill {
+      padding: 0.22rem 0.6rem; border-radius: 20px; font-size: 0.7rem; font-weight: 600;
+      border: 1px solid #252525; color: #3a3a3a; cursor: pointer; user-select: none;
+      transition: all 0.12s;
+    }
+    .tpill:hover { border-color: #444; color: #666; }
+    .tpill.require { color: var(--green); border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
+    .tpill.prohibit { color: var(--red);   border-color: rgba(255,82,82,0.45);  background: rgba(255,82,82,0.07); }
     @media(max-width:600px) { .grid{padding:1rem;gap:.8rem} header{padding:.7rem 1rem} }
     .range-row {
       display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;
@@ -1286,12 +1298,13 @@ _WEB_HTML = r"""<!DOCTYPE html>
 </header>
 <div id="statusbar">Ready — enter a search query above</div>
 <div id="site-status"></div>
+<div id="tag-bar"></div>
 <div class="grid" id="grid"></div>
 
 <script>
 const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0'};
 const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar'};
-let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set() };
+let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set(), tagState:new Map() };
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
@@ -1367,6 +1380,65 @@ function updateRangeSliders() {
 });
 updateRangeSliders();
 
+const STOP = new Set([
+  'a','an','the','and','or','with','for','in','on','at','by','to','of','is','as','no','not',
+  'its','this','that','are','was','has','had','been','will','but','via','my','our','your',
+  'their','all','both','each','from','into','over','than','then','when','where','which',
+  'who','how','why','what','one','two','three','per','sale','auction','reserve','bid',
+  'car','auto','vehicle','used','new','amp','very','only','just','also','well','great',
+  'nice','good','clean','rare','low','high','long','time','see','more','less',
+]);
+
+function tokenizeTitle(title) {
+  return [...new Set(
+    title.split(/[\s\-\/,.()\[\]&+#@!?:;'"]+/)
+      .map(t => t.toLowerCase().replace(/[^a-z0-9]/g, ''))
+      .filter(t => t.length >= 2)
+      .filter(t => !/^\d+$/.test(t))
+      .filter(t => !/^(19|20)\d{2}$/.test(t))
+      .filter(t => !STOP.has(t))
+  )];
+}
+
+function buildTagCounts() {
+  const counts = new Map();
+  for(const l of Object.values(st.bysite).flat()) {
+    for(const t of tokenizeTitle(l.title)) counts.set(t, (counts.get(t)||0) + 1);
+  }
+  return counts;
+}
+
+function renderTagBar() {
+  const all = Object.values(st.bysite).flat();
+  const bar = document.getElementById('tag-bar');
+  if(all.length < 2) { bar.style.display='none'; return; }
+  const counts = buildTagCounts();
+  const tags = [...counts.entries()]
+    .filter(([,n]) => n >= 2 && n < all.length)
+    .sort((a,b) => b[1]-a[1])
+    .slice(0, 35)
+    .map(([t]) => t);
+  if(!tags.length) { bar.style.display='none'; return; }
+  bar.style.display = 'flex';
+  bar.innerHTML = tags.map(t => {
+    const s = st.tagState.get(t)||null;
+    const cls = s ? ' '+s : '';
+    const suffix = s==='require' ? ' ✓' : s==='prohibit' ? ' ✕' : '';
+    return `<span class="tpill${cls}" data-tag="${esc(t)}">${esc(t)}${suffix}</span>`;
+  }).join('');
+}
+
+document.getElementById('tag-bar').addEventListener('click', e => {
+  const pill = e.target.closest('.tpill');
+  if(!pill) return;
+  const tag = pill.dataset.tag;
+  const cur = st.tagState.get(tag)||null;
+  const next = cur===null ? 'require' : cur==='require' ? 'prohibit' : null;
+  if(next===null) st.tagState.delete(tag); else st.tagState.set(tag, next);
+  renderTagBar();
+  render();
+});
+
 function allListings(){
   const sites = new Set(activeSites());
   const activeOnly  = isActiveOnly();
@@ -1390,6 +1462,12 @@ function allListings(){
   const phi = parseInt(document.getElementById('price-hi').value);
   if(plo > 0 || phi < 500000) {
     all = all.filter(l => { const p=parsePrice(l.price); return p===null || (p>=plo && p<=phi); });
+  }
+  // Tag filters
+  for(const [tag, state] of st.tagState) {
+    const re = new RegExp('\\b' + tag.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\b', 'i');
+    if(state==='require')  all = all.filter(l => re.test(l.title));
+    if(state==='prohibit') all = all.filter(l => !re.test(l.title));
   }
   return all.sort((a,b)=>tlMinutes(a.time_left)-tlMinutes(b.time_left));
 }
@@ -1467,10 +1545,11 @@ function doSearch(e){
   const sites=activeSites();
   if(!sites.length) return;
   if(st.es){ st.es.close(); st.es=null; }
-  st.bysite={}; st.lastQ=q; st.lastT='';
+  st.bysite={}; st.lastQ=q; st.lastT=''; st.tagState=new Map();
   document.getElementById('search-btn').disabled=true;
   document.getElementById('grid').innerHTML='';
   document.getElementById('site-status').innerHTML='';
+  document.getElementById('tag-bar').style.display='none';
   const activeOnly=!!document.querySelector('[data-filter="active"].on');
   const sp=sites.map(s=>`sites=${encodeURIComponent(s)}`).join('&');
   const url=`/api/search/stream?q=${encodeURIComponent(q)}&${sp}${activeOnly?'&active=1':''}`;
@@ -1481,6 +1560,7 @@ function doSearch(e){
     const d=JSON.parse(ev.data);
     st.bysite[d.site]=d.listings||[];
     setSitePill(d.site, d.error?'error':'done', (d.error?'✕ ': d.listings.length+' · ')+SN[d.site]);
+    renderTagBar();
     render();
   });
   es.addEventListener('done',ev=>{
@@ -1490,6 +1570,7 @@ function doSearch(e){
     st.lastT=new Date().toLocaleTimeString();
     es.close(); st.es=null;
     document.getElementById('search-btn').disabled=false;
+    renderTagBar();
     render();
   });
   es.onerror=()=>{ es.close(); st.es=null; document.getElementById('search-btn').disabled=false; };
