@@ -1211,6 +1211,37 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .tl.ended  { background: rgba(255,82,82,.1);  color: #4a4a4a; }
     .empty { grid-column:1/-1; text-align:center; color:#2e2e2e; padding:4rem; font-size:.95rem; }
     @media(max-width:600px) { .grid{padding:1rem;gap:.8rem} header{padding:.7rem 1rem} }
+    .range-row {
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;
+      font-size: 0.72rem; color: var(--dim); white-space: nowrap;
+    }
+    .range-row label { min-width: 3.2rem; text-align: right; color: #666; }
+    .range-row .range-val { min-width: 3.6rem; color: var(--text); font-weight: 600; font-size: 0.72rem; }
+    .range-row .range-val.right { text-align: left; }
+    .dual-range { position: relative; width: 140px; height: 20px; flex-shrink: 0; }
+    .dual-range input[type=range] {
+      position: absolute; width: 100%; height: 4px; top: 50%; transform: translateY(-50%);
+      appearance: none; -webkit-appearance: none;
+      background: transparent; pointer-events: none; outline: none; margin: 0; padding: 0;
+    }
+    .dual-range input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); border: 2px solid #0d0d0d;
+      cursor: pointer; pointer-events: all; position: relative; z-index: 2;
+    }
+    .dual-range input[type=range]::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); border: 2px solid #0d0d0d;
+      cursor: pointer; pointer-events: all;
+    }
+    .dual-range .track {
+      position: absolute; height: 4px; top: 50%; transform: translateY(-50%);
+      left: 0; right: 0; border-radius: 2px; background: #2a2a2a; z-index: 0;
+    }
+    .dual-range .track-fill {
+      position: absolute; height: 100%; border-radius: 2px; background: var(--accent); opacity: 0.5;
+    }
   </style>
 </head>
 <body>
@@ -1229,6 +1260,26 @@ _WEB_HTML = r"""<!DOCTYPE html>
       <div class="pill on" data-filter="active">Active only</div>
       <div class="pill" data-filter="starred">★ Starred</div>
       <div class="pill" data-filter="ignored">✕ Ignored</div>
+    </div>
+    <div class="range-row">
+      <label>Year</label>
+      <span class="range-val" id="year-lo-lbl">1950</span>
+      <div class="dual-range" id="year-range">
+        <div class="track"><div class="track-fill" id="year-fill"></div></div>
+        <input type="range" id="year-lo" min="1950" max="2025" value="1950" step="1">
+        <input type="range" id="year-hi" min="1950" max="2025" value="2025" step="1">
+      </div>
+      <span class="range-val right" id="year-hi-lbl">2025</span>
+    </div>
+    <div class="range-row">
+      <label>Price</label>
+      <span class="range-val" id="price-lo-lbl">Any</span>
+      <div class="dual-range" id="price-range">
+        <div class="track"><div class="track-fill" id="price-fill"></div></div>
+        <input type="range" id="price-lo" min="0" max="500000" value="0" step="1000">
+        <input type="range" id="price-hi" min="0" max="500000" value="500000" step="1000">
+      </div>
+      <span class="range-val right" id="price-hi-lbl">Any</span>
     </div>
     <button type="submit" id="search-btn">Search</button>
   </form>
@@ -1260,6 +1311,62 @@ function isActiveOnly()  { return !!document.querySelector('[data-filter="active
 function isStarredOnly() { return !!document.querySelector('[data-filter="starred"].on'); }
 function isIgnoredOnly() { return !!document.querySelector('[data-filter="ignored"].on'); }
 
+function extractYear(title) {
+  const m = title.match(/\b(19[0-9]{2}|20[0-2][0-9])\b/);
+  return m ? parseInt(m[1]) : null;
+}
+
+function parsePrice(priceStr) {
+  if(!priceStr) return null;
+  const n = parseInt(priceStr.replace(/[^0-9]/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+function fmtPrice(n) {
+  if(n === 0) return 'Any';
+  if(n >= 500000) return 'Any';
+  return '$' + n.toLocaleString();
+}
+
+function updateRangeSliders() {
+  const ylo = parseInt(document.getElementById('year-lo').value);
+  const yhi = parseInt(document.getElementById('year-hi').value);
+  const plo = parseInt(document.getElementById('price-lo').value);
+  const phi = parseInt(document.getElementById('price-hi').value);
+  document.getElementById('year-lo-lbl').textContent = ylo;
+  document.getElementById('year-hi-lbl').textContent = yhi;
+  document.getElementById('price-lo-lbl').textContent = fmtPrice(plo);
+  document.getElementById('price-hi-lbl').textContent = fmtPrice(phi);
+  // Update track fill bars
+  const yMin=1950, yMax=2025;
+  const yL=(ylo-yMin)/(yMax-yMin)*100, yR=(yhi-yMin)/(yMax-yMin)*100;
+  document.getElementById('year-fill').style.left=yL+'%';
+  document.getElementById('year-fill').style.width=(yR-yL)+'%';
+  const pMin=0, pMax=500000;
+  const pL=plo/pMax*100, pR=phi/pMax*100;
+  document.getElementById('price-fill').style.left=pL+'%';
+  document.getElementById('price-fill').style.width=(pR-pL)+'%';
+}
+
+['year-lo','year-hi','price-lo','price-hi'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    // Clamp so lo <= hi
+    const lo = document.getElementById('year-lo'), hi = document.getElementById('year-hi');
+    if(parseInt(lo.value) > parseInt(hi.value)) {
+      if(id==='year-lo') lo.value = hi.value;
+      else hi.value = lo.value;
+    }
+    const plo = document.getElementById('price-lo'), phi = document.getElementById('price-hi');
+    if(parseInt(plo.value) > parseInt(phi.value)) {
+      if(id==='price-lo') plo.value = phi.value;
+      else phi.value = plo.value;
+    }
+    updateRangeSliders();
+    render();
+  });
+});
+updateRangeSliders();
+
 function allListings(){
   const sites = new Set(activeSites());
   const activeOnly  = isActiveOnly();
@@ -1272,6 +1379,18 @@ function allListings(){
   if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
   else            all = all.filter(l => !st.ignored.has(l.short_id));
   if(starredOnly) all = all.filter(l => st.starred.has(l.short_id));
+  // Year filter
+  const ylo = parseInt(document.getElementById('year-lo').value);
+  const yhi = parseInt(document.getElementById('year-hi').value);
+  if(ylo > 1950 || yhi < 2025) {
+    all = all.filter(l => { const y=extractYear(l.title); return y===null || (y>=ylo && y<=yhi); });
+  }
+  // Price filter
+  const plo = parseInt(document.getElementById('price-lo').value);
+  const phi = parseInt(document.getElementById('price-hi').value);
+  if(plo > 0 || phi < 500000) {
+    all = all.filter(l => { const p=parsePrice(l.price); return p===null || (p>=plo && p<=phi); });
+  }
   return all.sort((a,b)=>tlMinutes(a.time_left)-tlMinutes(b.time_left));
 }
 
