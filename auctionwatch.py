@@ -264,6 +264,10 @@ def _time_left_minutes(time_left: str) -> float:
     if m: total += int(m.group(1)) * 60
     m = re.search(r'(\d+)\s*M', t, re.I)
     if m: total += int(m.group(1))
+    if not total:
+        # HH:MM:SS format (C&B, BaT)
+        m = re.search(r'(\d+):(\d{2}):\d{2}', t)
+        if m: total = int(m.group(1)) * 60 + int(m.group(2))
     return total if total > 0 else float("inf")
 
 
@@ -1293,6 +1297,11 @@ function tlMinutes(tl){
   const d=t.match(/(\d+)\s*D/i); if(d) m+=parseInt(d[1])*1440;
   const h=t.match(/(\d+)\s*H/i); if(h) m+=parseInt(h[1])*60;
   const mn=t.match(/(\d+)\s*M/i); if(mn) m+=parseInt(mn[1]);
+  if(!m){
+    // HH:MM:SS format (C&B, BaT)
+    const ts=t.match(/(\d+):(\d{2}):\d{2}/);
+    if(ts) m=parseInt(ts[1])*60+parseInt(ts[2]);
+  }
   return m||Infinity;
 }
 
