@@ -1623,12 +1623,12 @@ document.querySelectorAll('.pill').forEach(p=>p.addEventListener('click',()=>{
   render();
 }));
 
-// Pre-fill from URL param and auto-search
+// Always pre-load ignored/starred so they're available before the first search completes
 const initQ=new URLSearchParams(location.search).get('q')||'';
-if(initQ){
-  document.getElementById('q').value=initQ;
-  fetch('/api/store').then(r=>r.json()).then(d=>{ st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); st.ignored=new Set(d.ignored||[]); doSearch(null); });
-}
+fetch('/api/store').then(r=>r.json()).then(d=>{
+  st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); st.ignored=new Set(d.ignored||[]);
+  if(initQ){ document.getElementById('q').value=initQ; doSearch(null); }
+});
 </script>
 </body>
 </html>
