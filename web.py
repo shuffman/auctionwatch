@@ -367,8 +367,8 @@ function renderTagBar() {
   const counts = buildTagCounts();
   const tags = [...counts.entries()]
     .filter(([,n]) => n >= 2 && n < all.length)
-    .sort((a,b) => b[1]-a[1])
-    .slice(0, 35)
+    .sort((a,b) => a[0].localeCompare(b[0]))
+    .slice(0, 60)
     .map(([t]) => t);
   if(!tags.length) { bar.style.display='none'; return; }
   bar.style.display = 'flex';
@@ -479,11 +479,73 @@ function cardHtml(l, seen){
 </div>`;
 }
 
+function stateToUrl() {
+  const p = new URLSearchParams();
+  const q = document.getElementById('q').value.trim();
+  if(q) p.set('q', q);
+  // Sites: only encode if not all-required (the default)
+  const req=[], proh=[];
+  document.querySelectorAll('#spills .pill').forEach(pill => {
+    if(pill.classList.contains('on')) req.push(pill.dataset.site);
+    else if(pill.classList.contains('prohibit')) proh.push(pill.dataset.site);
+  });
+  const allSites = ['cab','bat','hagerty','pcar'];
+  if(req.length < allSites.length || proh.length > 0) {
+    if(req.length)  p.set('s',  req.join(','));
+    if(proh.length) p.set('xs', proh.join(','));
+  }
+  // Filter pills: only encode non-defaults (active defaults ON, others OFF)
+  if(!document.querySelector('[data-filter="active"].on'))   p.set('active',   '0');
+  if(document.querySelector('[data-filter="starred"].on'))   p.set('starred',  '1');
+  if(document.querySelector('[data-filter="ignored"].on'))   p.set('ignored',  '1');
+  // Ranges
+  const rangeMap = {'ylo':'year-lo','yhi':'year-hi','plo':'price-lo','phi':'price-hi'};
+  for(const [key,id] of Object.entries(rangeMap)) { const v=document.getElementById(id).value; if(v) p.set(key,v); }
+  // Tag states
+  const tr=[], tp=[];
+  for(const [tag,state] of st.tagState) { if(state==='require') tr.push(tag); else if(state==='prohibit') tp.push(tag); }
+  if(tr.length) p.set('tr', tr.join(','));
+  if(tp.length) p.set('tp', tp.join(','));
+  const qs = p.toString();
+  history.replaceState(null, '', qs ? '?'+qs : location.pathname);
+}
+
+function urlToState() {
+  const p = new URLSearchParams(location.search);
+  // Query
+  const q = p.get('q') || '';
+  if(q) document.getElementById('q').value = q;
+  // Sites
+  const s  = p.get('s'),  xs = p.get('xs');
+  if(s !== null || xs !== null) {
+    const req  = new Set((s  || '').split(',').filter(Boolean));
+    const proh = new Set((xs || '').split(',').filter(Boolean));
+    document.querySelectorAll('#spills .pill').forEach(pill => {
+      const site = pill.dataset.site;
+      pill.classList.remove('on','prohibit');
+      if(proh.has(site))      { pill.classList.add('prohibit'); pill.textContent = pill.dataset.label+' ✕'; }
+      else if(req.has(site))  { pill.classList.add('on');       pill.textContent = pill.dataset.label+' ✓'; }
+      else                    {                                  pill.textContent = pill.dataset.label; }
+    });
+  }
+  // Filter pills
+  if(p.get('active')  === '0') document.querySelector('[data-filter="active"]')?.classList.remove('on');
+  if(p.get('starred') === '1') document.querySelector('[data-filter="starred"]')?.classList.add('on');
+  if(p.get('ignored') === '1') document.querySelector('[data-filter="ignored"]')?.classList.add('on');
+  // Ranges
+  const rangeMap = {'ylo':'year-lo','yhi':'year-hi','plo':'price-lo','phi':'price-hi'};
+  for(const [key,id] of Object.entries(rangeMap)) { const v=p.get(key); if(v) document.getElementById(id).value=v; }
+  // Tags
+  for(const tag of (p.get('tr')||'').split(',').filter(Boolean)) st.tagState.set(tag,'require');
+  for(const tag of (p.get('tp')||'').split(',').filter(Boolean)) st.tagState.set(tag,'prohibit');
+  return q;
+}
+
 function render(){
   const listings = allListings();
   const si = startIdx(listings);
   const grid = document.getElementById('grid');
-  if(!listings.length){ grid.innerHTML=''; return; }
+  if(!listings.length){ grid.innerHTML=''; stateToUrl(); return; }
   let html='';
   for(let i=0;i<listings.length;i++){
     if(si!==null && i===si) html+='<div class="seen-div"><span>seen below</span></div>';
@@ -496,6 +558,7 @@ function render(){
     + (si!==null ? ` <span class="nb">${newN} new</span>` : '')
     + (st.lastQ ? ` &nbsp;for <em>"${esc(st.lastQ)}"</em>` : '')
     + (st.lastT ? ` &nbsp;&middot; ${st.lastT}` : '');
+  stateToUrl();
 }
 
 function setSitePill(site, cls, text){
@@ -514,6 +577,7 @@ function doSearch(e){
   if(!sites.length) return;
   if(st.es){ st.es.close(); st.es=null; }
   st.bysite={}; st.lastQ=q; st.lastT=''; st.tagState=new Map();
+  stateToUrl();
   document.getElementById('search-btn').disabled=true;
   document.getElementById('grid').innerHTML='';
   document.getElementById('site-status').innerHTML='';
@@ -604,11 +668,11 @@ document.querySelectorAll('.pill[data-filter]').forEach(p=>p.addEventListener('c
   render();
 }));
 
-// Always pre-load ignored/starred so they're available before the first search completes
-const initQ=new URLSearchParams(location.search).get('q')||'';
+// Restore state from URL, then pre-load user data and auto-search if query present
+const initQ = urlToState();
 fetch('/api/store').then(r=>r.json()).then(d=>{
   st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); st.ignored=new Set(d.ignored||[]);
-  if(initQ){ document.getElementById('q').value=initQ; doSearch(null); }
+  if(initQ) doSearch(null);
 });
 </script>
 </body>
