@@ -1128,6 +1128,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .pill[data-site="bat"].on  { color: #4caf50; border-color: #4caf50; }
     .pill[data-site="hagerty"].on { color: #2196f3; border-color: #2196f3; }
     .pill[data-site="pcar"].on { color: #9c27b0; border-color: #9c27b0; }
+    .pill[data-site].prohibit { color: var(--red); border-color: rgba(255,82,82,0.45); }
     .pill[data-filter="active"].on  { color: var(--green);  border-color: var(--green); }
     .pill[data-filter="starred"].on { color: var(--yellow); border-color: var(--yellow); }
     .pill[data-filter="ignored"].on { color: var(--red);    border-color: var(--red); }
@@ -1263,10 +1264,10 @@ _WEB_HTML = r"""<!DOCTYPE html>
   <form id="sf">
     <input id="q" type="text" placeholder="Search auctions..." autocomplete="off">
     <div class="pills" id="spills">
-      <div class="pill on" data-site="cab">C&amp;B</div>
-      <div class="pill on" data-site="bat">BaT</div>
-      <div class="pill on" data-site="hagerty">Hagerty</div>
-      <div class="pill on" data-site="pcar">PCar</div>
+      <div class="pill on" data-site="cab" data-label="C&amp;B">C&amp;B</div>
+      <div class="pill on" data-site="bat" data-label="BaT">BaT</div>
+      <div class="pill on" data-site="hagerty" data-label="Hagerty">Hagerty</div>
+      <div class="pill on" data-site="pcar" data-label="PCar">PCar</div>
     </div>
     <div class="pills">
       <div class="pill on" data-filter="active">Active only</div>
@@ -1308,7 +1309,7 @@ let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ign
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
-function activeSites(){ return [...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site) }
+function activeSites(){ return [...document.querySelectorAll('#spills .pill')].filter(p=>!p.classList.contains('prohibit')).map(p=>p.dataset.site) }
 
 function tlMinutes(tl){
   const t=(tl||'').trim();
@@ -1439,13 +1440,19 @@ document.getElementById('tag-bar').addEventListener('click', e => {
 });
 
 function allListings(){
-  const sites = new Set(activeSites());
   const activeOnly  = isActiveOnly();
   const starredOnly = isStarredOnly();
   const ignoredOnly = isIgnoredOnly();
   const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar'};
+  const reqSites  = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
+  const probSites = new Set([...document.querySelectorAll('#spills .pill.prohibit')].map(p=>p.dataset.site));
   let all = ['cab','bat','hagerty','pcar'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
-  all = all.filter(l => sites.has(siteKey[l.source]||''));
+  all = all.filter(l => {
+    const k = siteKey[l.source]||'';
+    if(probSites.has(k)) return false;
+    if(reqSites.size > 0 && !reqSites.has(k)) return false;
+    return true;
+  });
   if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
   if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
   else            all = all.filter(l => !st.ignored.has(l.short_id));
@@ -1612,9 +1619,22 @@ async function starCard(id, e){
 }
 
 document.getElementById('sf').addEventListener('submit', doSearch);
-document.querySelectorAll('.pill').forEach(p=>p.addEventListener('click',()=>{
+
+// Site pills: three-state cycle require(.on) → neutral → prohibit → require
+document.querySelectorAll('#spills .pill').forEach(p=>p.addEventListener('click',()=>{
+  const cur = p.classList.contains('on') ? 'require' : p.classList.contains('prohibit') ? 'prohibit' : 'neutral';
+  const next = cur==='require' ? 'neutral' : cur==='neutral' ? 'prohibit' : 'require';
+  p.classList.remove('on','prohibit');
+  if(next==='require') p.classList.add('on');
+  if(next==='prohibit') p.classList.add('prohibit');
+  p.textContent = p.dataset.label + (next==='require' ? ' ✓' : next==='prohibit' ? ' ✕' : '');
+  render();
+}));
+
+// Filter pills: simple toggle
+document.querySelectorAll('.pill[data-filter]').forEach(p=>p.addEventListener('click',()=>{
   p.classList.toggle('on');
-  // Starred and Ignored filters are mutually exclusive
+  // Starred and Ignored are mutually exclusive
   if(p.dataset.filter==='starred' && p.classList.contains('on'))
     document.querySelector('[data-filter="ignored"]')?.classList.remove('on');
   else if(p.dataset.filter==='ignored' && p.classList.contains('on'))
