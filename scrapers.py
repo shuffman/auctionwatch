@@ -423,7 +423,7 @@ async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list
 
     try:
         await page.goto(f"{base}/auctions", wait_until="domcontentloaded", timeout=25000)
-        await page.wait_for_selector('#__PRELOADED_AUCTIONS_LIST__', timeout=15000)
+        await page.wait_for_selector('#__PRELOADED_AUCTIONS_LIST__', state="attached", timeout=15000)
 
         if debug:
             _save_debug(await page.content(), "pcarmarket")
