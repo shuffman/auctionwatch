@@ -486,6 +486,17 @@ async def _eval_listings(page: Page, link_selector: str) -> list[dict]:
         return []
 
 
+async def _scroll_to_bottom(page: Page, pause_ms: int = 800, max_scrolls: int = 15):
+    """Scroll incrementally to trigger lazy-loaded content."""
+    for _ in range(max_scrolls):
+        prev = await page.evaluate("document.body.scrollHeight")
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await page.wait_for_timeout(pause_ms)
+        curr = await page.evaluate("document.body.scrollHeight")
+        if curr == prev:
+            break
+
+
 async def scrape_carsandbids(page: Page, query: str, debug: bool = False) -> list[Listing]:
     source = "Cars & Bids"
     base = "https://carsandbids.com"
@@ -500,7 +511,8 @@ async def scrape_carsandbids(page: Page, query: str, debug: bool = False) -> lis
         if debug:
             _save_debug(await page.content(), "carsandbids")
 
-        for item in (await _eval_listings(page, 'a[href*="/auctions/"]'))[:25]:
+        await _scroll_to_bottom(page)
+        for item in (await _eval_listings(page, 'a[href*="/auctions/"]')):
             url = item.get("url", "")
             if not url:
                 continue
@@ -537,7 +549,8 @@ async def scrape_bat(page: Page, query: str, debug: bool = False) -> list[Listin
         if debug:
             _save_debug(await page.content(), "bat")
 
-        for item in (await _eval_listings(page, 'a[href*="/listing/"]'))[:25]:
+        await _scroll_to_bottom(page)
+        for item in (await _eval_listings(page, 'a[href*="/listing/"]')):
             if item.get("title") and item.get("url"):
                 # BaT is auctions-only: no countdown = auction ended
                 time_left = item.get("timeLeft", "") or "Ended"
@@ -577,7 +590,8 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
             timeout=20000,
         )
 
-        for item in (await _eval_listings(page, 'a[href*="/marketplace/auction/"]'))[:25]:
+        await _scroll_to_bottom(page)
+        for item in (await _eval_listings(page, 'a[href*="/marketplace/auction/"]')):
             title = item.get("title", "")
             url = item.get("url", "")
             if not title or not url:
