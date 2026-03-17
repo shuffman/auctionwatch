@@ -1226,7 +1226,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
       <div class="pill on" data-site="pcar">PCar</div>
     </div>
     <div class="pills">
-      <div class="pill" data-filter="active">Active only</div>
+      <div class="pill on" data-filter="active">Active only</div>
       <div class="pill" data-filter="starred">★ Starred</div>
       <div class="pill" data-filter="ignored">✕ Ignored</div>
     </div>
