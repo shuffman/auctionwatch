@@ -1225,36 +1225,19 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .tpill.prohibit { color: var(--red);   border-color: rgba(255,82,82,0.45);  background: rgba(255,82,82,0.07); }
     @media(max-width:600px) { .grid{padding:1rem;gap:.8rem} header{padding:.7rem 1rem} }
     .range-row {
-      display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;
+      display: flex; align-items: center; gap: 0.35rem;
       font-size: 0.72rem; color: var(--dim); white-space: nowrap;
     }
-    .range-row label { min-width: 3.2rem; text-align: right; color: #666; }
-    .range-row .range-val { min-width: 3.6rem; color: var(--text); font-weight: 600; font-size: 0.72rem; }
-    .range-row .range-val.right { text-align: left; }
-    .dual-range { position: relative; width: 140px; height: 20px; flex-shrink: 0; }
-    .dual-range input[type=range] {
-      position: absolute; width: 100%; height: 4px; top: 50%; transform: translateY(-50%);
-      appearance: none; -webkit-appearance: none;
-      background: transparent; pointer-events: none; outline: none; margin: 0; padding: 0;
+    .range-row label { color: #666; }
+    .range-row input[type=number] {
+      width: 68px; background: #1e1e1e; border: 1px solid #333; border-radius: 5px;
+      padding: 0.28rem 0.45rem; color: var(--text); font-size: 0.72rem; outline: none;
     }
-    .dual-range input[type=range]::-webkit-slider-thumb {
-      -webkit-appearance: none; appearance: none;
-      width: 14px; height: 14px; border-radius: 50%;
-      background: var(--accent); border: 2px solid #0d0d0d;
-      cursor: pointer; pointer-events: all; position: relative; z-index: 2;
-    }
-    .dual-range input[type=range]::-moz-range-thumb {
-      width: 14px; height: 14px; border-radius: 50%;
-      background: var(--accent); border: 2px solid #0d0d0d;
-      cursor: pointer; pointer-events: all;
-    }
-    .dual-range .track {
-      position: absolute; height: 4px; top: 50%; transform: translateY(-50%);
-      left: 0; right: 0; border-radius: 2px; background: #2a2a2a; z-index: 0;
-    }
-    .dual-range .track-fill {
-      position: absolute; height: 100%; border-radius: 2px; background: var(--accent); opacity: 0.5;
-    }
+    .range-row input[type=number]:focus { border-color: var(--accent); }
+    .range-row input[type=number]::-webkit-inner-spin-button,
+    .range-row input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    .range-row input[type=number] { -moz-appearance: textfield; }
+    .range-sep { color: #333; }
   </style>
 </head>
 <body>
@@ -1276,23 +1259,15 @@ _WEB_HTML = r"""<!DOCTYPE html>
     </div>
     <div class="range-row">
       <label>Year</label>
-      <span class="range-val" id="year-lo-lbl">1950</span>
-      <div class="dual-range" id="year-range">
-        <div class="track"><div class="track-fill" id="year-fill"></div></div>
-        <input type="range" id="year-lo" min="1950" max="2025" value="1950" step="1">
-        <input type="range" id="year-hi" min="1950" max="2025" value="2025" step="1">
-      </div>
-      <span class="range-val right" id="year-hi-lbl">2025</span>
+      <input type="number" id="year-lo" placeholder="Min" min="1900" max="2030" step="1">
+      <span class="range-sep">–</span>
+      <input type="number" id="year-hi" placeholder="Max" min="1900" max="2030" step="1">
     </div>
     <div class="range-row">
-      <label>Price</label>
-      <span class="range-val" id="price-lo-lbl">Any</span>
-      <div class="dual-range" id="price-range">
-        <div class="track"><div class="track-fill" id="price-fill"></div></div>
-        <input type="range" id="price-lo" min="0" max="500000" value="0" step="1000">
-        <input type="range" id="price-hi" min="0" max="500000" value="500000" step="1000">
-      </div>
-      <span class="range-val right" id="price-hi-lbl">Any</span>
+      <label>Price $</label>
+      <input type="number" id="price-lo" placeholder="Min" min="0" step="500">
+      <span class="range-sep">–</span>
+      <input type="number" id="price-hi" placeholder="Max" min="0" step="500">
     </div>
     <button type="submit" id="search-btn">Search</button>
   </form>
@@ -1336,50 +1311,9 @@ function parsePrice(priceStr) {
   return isNaN(n) ? null : n;
 }
 
-function fmtPrice(n) {
-  if(n === 0) return 'Any';
-  if(n >= 500000) return 'Any';
-  return '$' + n.toLocaleString();
-}
-
-function updateRangeSliders() {
-  const ylo = parseInt(document.getElementById('year-lo').value);
-  const yhi = parseInt(document.getElementById('year-hi').value);
-  const plo = parseInt(document.getElementById('price-lo').value);
-  const phi = parseInt(document.getElementById('price-hi').value);
-  document.getElementById('year-lo-lbl').textContent = ylo;
-  document.getElementById('year-hi-lbl').textContent = yhi;
-  document.getElementById('price-lo-lbl').textContent = fmtPrice(plo);
-  document.getElementById('price-hi-lbl').textContent = fmtPrice(phi);
-  // Update track fill bars
-  const yMin=1950, yMax=2025;
-  const yL=(ylo-yMin)/(yMax-yMin)*100, yR=(yhi-yMin)/(yMax-yMin)*100;
-  document.getElementById('year-fill').style.left=yL+'%';
-  document.getElementById('year-fill').style.width=(yR-yL)+'%';
-  const pMin=0, pMax=500000;
-  const pL=plo/pMax*100, pR=phi/pMax*100;
-  document.getElementById('price-fill').style.left=pL+'%';
-  document.getElementById('price-fill').style.width=(pR-pL)+'%';
-}
-
 ['year-lo','year-hi','price-lo','price-hi'].forEach(id => {
-  document.getElementById(id).addEventListener('input', () => {
-    // Clamp so lo <= hi
-    const lo = document.getElementById('year-lo'), hi = document.getElementById('year-hi');
-    if(parseInt(lo.value) > parseInt(hi.value)) {
-      if(id==='year-lo') lo.value = hi.value;
-      else hi.value = lo.value;
-    }
-    const plo = document.getElementById('price-lo'), phi = document.getElementById('price-hi');
-    if(parseInt(plo.value) > parseInt(phi.value)) {
-      if(id==='price-lo') plo.value = phi.value;
-      else phi.value = plo.value;
-    }
-    updateRangeSliders();
-    render();
-  });
+  document.getElementById(id).addEventListener('input', render);
 });
-updateRangeSliders();
 
 const STOP = new Set([
   'a','an','the','and','or','with','for','in','on','at','by','to','of','is','as','no','not',
@@ -1458,16 +1392,26 @@ function allListings(){
   else            all = all.filter(l => !st.ignored.has(l.short_id));
   if(starredOnly) all = all.filter(l => st.starred.has(l.short_id));
   // Year filter
-  const ylo = parseInt(document.getElementById('year-lo').value);
-  const yhi = parseInt(document.getElementById('year-hi').value);
-  if(ylo > 1950 || yhi < 2025) {
-    all = all.filter(l => { const y=extractYear(l.title); return y===null || (y>=ylo && y<=yhi); });
+  const yloV = document.getElementById('year-lo').value;
+  const yhiV = document.getElementById('year-hi').value;
+  if(yloV || yhiV) {
+    all = all.filter(l => {
+      const y = extractYear(l.title); if(y===null) return true;
+      if(yloV && y < parseInt(yloV)) return false;
+      if(yhiV && y > parseInt(yhiV)) return false;
+      return true;
+    });
   }
   // Price filter
-  const plo = parseInt(document.getElementById('price-lo').value);
-  const phi = parseInt(document.getElementById('price-hi').value);
-  if(plo > 0 || phi < 500000) {
-    all = all.filter(l => { const p=parsePrice(l.price); return p===null || (p>=plo && p<=phi); });
+  const ploV = document.getElementById('price-lo').value;
+  const phiV = document.getElementById('price-hi').value;
+  if(ploV || phiV) {
+    all = all.filter(l => {
+      const p = parsePrice(l.price); if(p===null) return true;
+      if(ploV && p < parseInt(ploV)) return false;
+      if(phiV && p > parseInt(phiV)) return false;
+      return true;
+    });
   }
   // Tag filters
   for(const [tag, state] of st.tagState) {
