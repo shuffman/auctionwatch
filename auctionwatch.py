@@ -599,80 +599,86 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
     return listings
 
 
+def _fmt_pcar_time(seconds) -> str:
+    """Convert PCar Market time_remaining (seconds) to a sortable time string."""
+    try:
+        s = int(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if s <= 0:
+        return "Ended"
+    d, rem = divmod(s, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    parts = []
+    if d: parts.append(f"{d}D")
+    if h: parts.append(f"{h}H")
+    if m or not parts: parts.append(f"{m}M")
+    return " ".join(parts)
+
+
 async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list[Listing]:
     source = "PCar Market"
     base = "https://www.pcarmarket.com"
     listings = []
-    seen_urls: set[str] = set()
+    seen_slugs: set[str] = set()
     query_words = [w.lower() for w in query.split() if len(w) > 2]
 
-    def _process_page_items(items: list[dict]):
-        for item in items:
-            url = item.get("url", "")
-            if not url or url in seen_urls:
+    def _ingest(results: list[dict]):
+        for item in results:
+            slug = item.get("slug", "")
+            if not slug or slug in seen_slugs:
                 continue
-            seen_urls.add(url)
-            slug = urlparse(url).path.strip("/").split("/")[-1]
-            slug = re.sub(r'-\d+$', '', slug)
-            title = slug.replace("-", " ").title() if slug else item.get("title", "")
+            seen_slugs.add(slug)
+            title = item.get("title", "")
             if not title:
                 continue
-            title_lower = title.lower()
-            if query_words and not any(w in title_lower for w in query_words):
+            if query_words and not any(w in title.lower() for w in query_words):
                 continue
-            time_left = item.get("timeLeft", "") or "Ended"
+            status = (item.get("status") or "").lower()
+            if status in ("ended", "sold", "closed"):
+                time_left = "Ended"
+            else:
+                time_left = _fmt_pcar_time(item.get("time_remaining", 0))
             listings.append(Listing(
-                title=title, url=url, source=source,
-                price=item.get("price", ""), time_left=time_left,
-                location=item.get("location", ""), image_url=item.get("imageUrl", ""),
+                title=title,
+                url=f"{base}/auction/{slug}",
+                source=source,
+                price=item.get("current_bid", ""),
+                time_left=time_left,
+                location=item.get("location", ""),
+                image_url=item.get("featured_image_url", ""),
             ))
 
     try:
         await page.goto(f"{base}/auctions", wait_until="domcontentloaded", timeout=25000)
-        await page.wait_for_selector('a[href*="/auction/"]', timeout=15000)
-
-        # Set category to "All Vehicles" to exclude watches, parts, memorabilia, etc.
-        await page.click('button.pcar-styled-select__button:has-text("All Categories")')
-        await page.wait_for_selector('button.pcar-styled-select__option:has-text("All Vehicles")', timeout=5000)
-        await page.click('button.pcar-styled-select__option:has-text("All Vehicles")')
-        # Wait for the dropdown button label to confirm the selection
-        await page.wait_for_selector('button.pcar-styled-select__button:has-text("All Vehicles")', timeout=5000)
-
-        search_input = await page.query_selector("input[type='search'], input[placeholder*='Search' i]")
-        if search_input:
-            await search_input.fill(query)
-            await search_input.press("Enter")
-            await page.wait_for_timeout(3000)
+        await page.wait_for_selector('#__PRELOADED_AUCTIONS_LIST__', timeout=15000)
 
         if debug:
             _save_debug(await page.content(), "pcarmarket")
 
-        # Scrape page 1
-        _process_page_items(await _eval_listings(page, 'a[href*="/auction/"]'))
+        # Read page 1 from the embedded JSON the server injects into the page
+        api_data = await page.evaluate(
+            '() => { const el = document.getElementById("__PRELOADED_AUCTIONS_LIST__"); '
+            'return el ? JSON.parse(el.textContent) : null; }'
+        )
+        if not api_data:
+            return listings
 
-        # Walk through remaining pages by clicking Next
-        page_num = 1
-        while True:
-            next_btn = await page.query_selector('button.pcar-pagination__nav:has-text("Next")')
-            if not next_btn:
-                break
-            is_disabled = await next_btn.get_attribute("disabled")
-            if is_disabled is not None:
-                break
-            page_num += 1
-            first_url_before = await page.evaluate(
-                '() => { const a = document.querySelector(\'a[href*="/auction/"]\'); return a ? a.href : ""; }'
+        _ingest(api_data.get("results", []))
+
+        # Follow pagination via the 'next' API URL using the browser's fetch
+        # (inherits session cookies automatically)
+        next_url = api_data.get("next")
+        while next_url:
+            api_data = await page.evaluate(
+                f'async () => {{ const r = await fetch({json.dumps(next_url)},'
+                f' {{credentials:"include"}}); return r.json(); }}'
             )
-            await next_btn.click()
-            # Wait for the listing content to change
-            try:
-                await page.wait_for_function(
-                    f'() => {{ const a = document.querySelector(\'a[href*="/auction/"]\'); return a && a.href !== {json.dumps(first_url_before)}; }}',
-                    timeout=8000,
-                )
-            except PlaywrightTimeout:
+            if not api_data:
                 break
-            _process_page_items(await _eval_listings(page, 'a[href*="/auction/"]'))
+            _ingest(api_data.get("results", []))
+            next_url = api_data.get("next")
 
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out waiting for listings", "warning")
