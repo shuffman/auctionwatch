@@ -397,7 +397,7 @@ function allListings(){
   const activeOnly  = isActiveOnly();
   const starredOnly = isStarredOnly();
   const ignoredOnly = isIgnoredOnly();
-  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar'};
+  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Craigslist':'cl'};
   const reqSites  = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
   const probSites = new Set([...document.querySelectorAll('#spills .pill.prohibit')].map(p=>p.dataset.site));
   let all = ['cab','bat','hagerty','pcar','cl'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
