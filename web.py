@@ -172,10 +172,10 @@ _WEB_HTML = r"""<!DOCTYPE html>
     }
     .tpill {
       padding: 0.18rem 0.55rem; border-radius: 20px; font-size: 0.68rem; font-weight: 600;
-      border: 1px solid #1e1e1e; color: #333; cursor: pointer; user-select: none;
+      border: 1px solid #333; color: #777; cursor: pointer; user-select: none;
       transition: all 0.12s;
     }
-    .tpill:hover { border-color: #3a3a3a; color: #555; }
+    .tpill:hover { border-color: #555; color: #aaa; }
     .tpill.require { color: var(--green); border-color: rgba(0,230,118,0.4); background: rgba(0,230,118,0.06); }
     .tpill.prohibit { color: var(--red);  border-color: rgba(255,82,82,0.4); background: rgba(255,82,82,0.06); }
 
