@@ -370,6 +370,74 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
     return listings
 
 
+CL_METROS = [
+    ("Seattle",        "seattle"),
+    ("Portland",       "portland"),
+    ("Boise",          "boise"),
+    ("Los Angeles",    "losangeles"),
+    ("San Francisco",  "sfbay"),
+    ("Las Vegas",      "lasvegas"),
+    ("Phoenix",        "phoenix"),
+    ("Salt Lake City", "saltlake"),
+]
+
+_CL_JS = """() => {
+    const results = [];
+    document.querySelectorAll('.cl-search-result').forEach(div => {
+        const pid = div.dataset.pid || '';
+        const a = div.querySelector('a.posting-title');
+        if (!a || !a.href) return;
+        const title = a.textContent.trim();
+        if (!title) return;
+        const price = div.querySelector('.priceinfo')?.textContent?.trim() || '';
+        const img = div.querySelector('img');
+        const imgSrc = img ? (img.src || '') : '';
+        results.push({
+            pid, url: a.href, title, price,
+            imageUrl: imgSrc.startsWith('data:') ? '' : imgSrc,
+        });
+    });
+    return results;
+}"""
+
+
+async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "Craigslist"
+    listings = []
+    seen_pids: set[str] = set()
+
+    for city_name, subdomain in CL_METROS:
+        url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}"
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=20000)
+            if debug:
+                _save_debug(await page.content(), f"cl_{subdomain}")
+            items = await page.evaluate(_CL_JS) or []
+            for item in items:
+                pid = item.get("pid", "") or item.get("url", "")
+                if not pid or pid in seen_pids:
+                    continue
+                title = item.get("title", "").strip()
+                if not title:
+                    continue
+                seen_pids.add(pid)
+                listings.append(Listing(
+                    title=title,
+                    url=item.get("url", ""),
+                    source=source,
+                    price=item.get("price", ""),
+                    time_left="",
+                    location=city_name,
+                    image_url=item.get("imageUrl", ""),
+                ))
+        except PlaywrightTimeout:
+            _log(f"[{source}] Timed out: {city_name}", "warning")
+        except Exception as e:
+            _log(f"[{source}] Error {city_name}: {e}", "error")
+
+    return listings
+
+
 def _fmt_pcar_time(seconds) -> str:
     """Convert PCar Market time_remaining (seconds) to a sortable time string."""
     try:

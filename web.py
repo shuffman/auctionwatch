@@ -128,6 +128,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .pill[data-site="bat"].on  { color: #4caf50; border-color: rgba(76,175,80,0.5);  background: rgba(76,175,80,0.07); }
     .pill[data-site="hagerty"].on { color: #2196f3; border-color: rgba(33,150,243,0.5); background: rgba(33,150,243,0.07); }
     .pill[data-site="pcar"].on { color: #9c27b0; border-color: rgba(156,39,176,0.5); background: rgba(156,39,176,0.07); }
+    .pill[data-site="cl"].on   { color: #ff9800; border-color: rgba(255,152,0,0.5);  background: rgba(255,152,0,0.07); }
     .pill[data-site].prohibit { color: var(--red); border-color: rgba(255,82,82,0.4); background: rgba(255,82,82,0.06); }
     .pill[data-filter="active"].on  { color: var(--green);  border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
     .pill[data-filter="starred"].on { color: var(--yellow); border-color: rgba(230,200,74,0.45); background: rgba(230,200,74,0.07); }
@@ -257,6 +258,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
       <div class="pill on" data-site="bat"     data-label="BaT">BaT</div>
       <div class="pill on" data-site="hagerty" data-label="Hagerty">Hagerty</div>
       <div class="pill on" data-site="pcar"    data-label="PCar">PCar</div>
+      <div class="pill on" data-site="cl"      data-label="CL">CL</div>
     </div>
   </div>
   <div class="fsep"></div>
@@ -291,8 +293,8 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <div class="grid" id="grid"></div>
 
 <script>
-const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0'};
-const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar'};
+const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0','Craigslist':'#ff9800'};
+const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar', cl:'CL'};
 let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set(), tagState:new Map() };
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
@@ -398,14 +400,14 @@ function allListings(){
   const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar'};
   const reqSites  = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
   const probSites = new Set([...document.querySelectorAll('#spills .pill.prohibit')].map(p=>p.dataset.site));
-  let all = ['cab','bat','hagerty','pcar'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
+  let all = ['cab','bat','hagerty','pcar','cl'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
   all = all.filter(l => {
     const k = siteKey[l.source]||'';
     if(probSites.has(k)) return false;
     if(reqSites.size > 0 && !reqSites.has(k)) return false;
     return true;
   });
-  if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
+  if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; if(!t) return true; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
   if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
   else            all = all.filter(l => !st.ignored.has(l.short_id));
   if(starredOnly) all = all.filter(l => st.starred.has(l.short_id));
@@ -489,7 +491,7 @@ function stateToUrl() {
     if(pill.classList.contains('on')) req.push(pill.dataset.site);
     else if(pill.classList.contains('prohibit')) proh.push(pill.dataset.site);
   });
-  const allSites = ['cab','bat','hagerty','pcar'];
+  const allSites = ['cab','bat','hagerty','pcar','cl'];
   if(req.length < allSites.length || proh.length > 0) {
     if(req.length)  p.set('s',  req.join(','));
     if(proh.length) p.set('xs', proh.join(','));
