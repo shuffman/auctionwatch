@@ -21,6 +21,7 @@ from store import (
     _db_get_ignored, _db_set_ignored,
     _db_get_starred, _db_set_starred,
     _db_get_start, _db_set_start,
+    _db_save_search, _db_get_searches,
 )
 from scrapers import HAS_RICH, _console
 
@@ -99,6 +100,20 @@ _WEB_HTML = r"""<!DOCTYPE html>
       border-radius: 6px; padding: 0.42rem 0.75rem; color: var(--text); font-size: 0.9rem; outline: none;
     }
     #q:focus { border-color: var(--accent); }
+    #search-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+    #search-wrap #q { width: 100%; }
+    #recent-searches {
+      display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;
+      background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;
+    }
+    #recent-searches.open { display: block; }
+    .rs-item {
+      padding: 0.45rem 0.75rem; font-size: 0.85rem; color: var(--text-dim); cursor: pointer;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .rs-item:hover { background: #2a2a2a; color: var(--text); }
+    .rs-item .rs-icon { font-size: 0.7rem; opacity: 0.4; }
     #search-btn {
       padding: 0.4rem 1.1rem; background: var(--accent); border: none; border-radius: 6px;
       color: #000; font-weight: 700; font-size: 0.85rem; cursor: pointer; white-space: nowrap; flex-shrink: 0;
@@ -245,7 +260,10 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <header>
   <div class="brand">AuctionWatch</div>
   <form id="sf">
-    <input id="q" type="text" placeholder="Search auctions…" autocomplete="off">
+    <div id="search-wrap">
+      <input id="q" type="text" placeholder="Search auctions…" autocomplete="off">
+      <div id="recent-searches"></div>
+    </div>
     <button type="submit" id="search-btn">Search</button>
   </form>
   {{auth_link}}
@@ -602,6 +620,7 @@ function doSearch(e){
     es.close(); st.es=null;
     document.getElementById('search-btn').disabled=false;
     render();
+    fetch('/api/searches').then(r=>r.json()).then(d=>{ recentSearches = d.searches||[]; });
   });
   es.onerror=()=>{ es.close(); st.es=null; document.getElementById('search-btn').disabled=false; };
 }
@@ -666,12 +685,39 @@ document.querySelectorAll('.pill[data-filter]').forEach(p=>p.addEventListener('c
   render();
 }));
 
+// ── Recent searches dropdown ──────────────────────────────────────────────────
+let recentSearches = [];
+const rsEl = document.getElementById('recent-searches');
+const qEl  = document.getElementById('q');
+
+function showRecentSearches() {
+  if(!recentSearches.length) return;
+  rsEl.innerHTML = recentSearches.map(q =>
+    `<div class="rs-item" data-q="${esc(q)}"><span class="rs-icon">↩</span>${esc(q)}</div>`
+  ).join('');
+  rsEl.classList.add('open');
+}
+
+rsEl.addEventListener('mousedown', e => {
+  const item = e.target.closest('.rs-item');
+  if(!item) return;
+  e.preventDefault(); // prevent blur from firing before click
+  qEl.value = item.dataset.q;
+  rsEl.classList.remove('open');
+  doSearch(null);
+});
+
+qEl.addEventListener('focus', () => { if(recentSearches.length) showRecentSearches(); });
+qEl.addEventListener('blur',  () => { setTimeout(() => rsEl.classList.remove('open'), 150); });
+qEl.addEventListener('input', () => { rsEl.classList.remove('open'); });
+
 // Restore state from URL, then pre-load user data and auto-search if query present
 const initQ = urlToState();
 fetch('/api/store').then(r=>r.json()).then(d=>{
   st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); st.ignored=new Set(d.ignored||[]);
   if(initQ) doSearch(null);
 });
+fetch('/api/searches').then(r=>r.json()).then(d=>{ recentSearches = d.searches||[]; });
 </script>
 </body>
 </html>
@@ -749,6 +795,8 @@ def serve_web(initial_query: str = "", port: int = 5173):
             return jsonify({"error": "no query"}), 400
 
         uid = _uid()
+        if uid:
+            _db_save_search(uid, q)
         ignored  = _db_get_ignored(uid) if uid else set()
         start_id = _db_get_start(uid)   if uid else ""
 
@@ -843,6 +891,11 @@ def serve_web(initial_query: str = "", port: int = 5173):
                             "start":   _db_get_start(uid),
                             "starred": list(_db_get_starred(uid))})
         return jsonify({"ignored": [], "start": "", "starred": []})
+
+    @app.route("/api/searches")
+    def api_searches():
+        uid = _uid()
+        return jsonify({"searches": _db_get_searches(uid) if uid else []})
 
     # In a server environment (Railway etc.) PORT is set; bind publicly and skip browser open
     server_port = int(os.environ.get("PORT", port))

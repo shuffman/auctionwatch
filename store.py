@@ -106,6 +106,12 @@ def _init_db():
                 user_id INTEGER PRIMARY KEY,
                 listing_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS searches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                query TEXT NOT NULL,
+                searched_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
         """)
 
 def _db_get_or_create_user(username: str) -> int:
@@ -151,3 +157,25 @@ def _db_get_start(user_id: int) -> str:
 def _db_set_start(user_id: int, listing_id: str):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("INSERT OR REPLACE INTO user_start VALUES (?,?)", (user_id, listing_id))
+
+def _db_save_search(user_id: int, query: str):
+    """Save a search query, keeping only the 10 most recent per user."""
+    with sqlite3.connect(DB_PATH) as conn:
+        # Remove any existing entry for this exact query so it bubbles to top
+        conn.execute("DELETE FROM searches WHERE user_id=? AND query=?", (user_id, query))
+        conn.execute("INSERT INTO searches (user_id, query) VALUES (?,?)", (user_id, query))
+        # Prune to 10 most recent
+        conn.execute("""
+            DELETE FROM searches WHERE user_id=? AND id NOT IN (
+                SELECT id FROM searches WHERE user_id=? ORDER BY searched_at DESC LIMIT 10
+            )
+        """, (user_id, user_id))
+
+def _db_get_searches(user_id: int) -> list[str]:
+    """Return up to 10 recent search queries, newest first."""
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT query FROM searches WHERE user_id=? ORDER BY searched_at DESC LIMIT 10",
+            (user_id,)
+        ).fetchall()
+    return [r[0] for r in rows]
