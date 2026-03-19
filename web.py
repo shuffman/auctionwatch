@@ -356,7 +356,7 @@ function tokenizeTitle(title) {
 
 function buildTagCounts() {
   const counts = new Map();
-  for(const l of Object.values(st.bysite).flat().filter(l=>!st.ignored.has(l.short_id))) {
+  for(const l of Object.values(st.bysite).flat().filter(l=>!st.ignored.has(l.short_id) && l.source!=='Craigslist')) {
     for(const t of tokenizeTitle(l.title)) counts.set(t, (counts.get(t)||0) + 1);
   }
   return counts;
