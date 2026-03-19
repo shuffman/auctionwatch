@@ -405,6 +405,7 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list
     source = "Craigslist"
     listings = []
     seen_pids: set[str] = set()
+    seen_titles: set[str] = set()
 
     # Intercept image responses to capture URLs for lazy-loaded images.
     # CL images follow: https://images.craigslist.org/d/{pid}/{hash}_{size}.jpg
@@ -447,7 +448,11 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list
                     title = item.get("title", "").strip()
                     if not title:
                         continue
+                    title_key = title.lower()
+                    if title_key in seen_titles:
+                        continue
                     seen_pids.add(dedup_key)
+                    seen_titles.add(title_key)
                     dom_img = item.get("imageUrl", "")
                     image_url = pid_to_img.get(pid, "") or (dom_img if not dom_img.startswith("data:") else "")
                     listings.append(Listing(
