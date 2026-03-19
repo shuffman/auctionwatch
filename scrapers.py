@@ -406,34 +406,65 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list
     listings = []
     seen_pids: set[str] = set()
 
-    for city_name, subdomain in CL_METROS:
-        url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}"
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=20000)
-            if debug:
-                _save_debug(await page.content(), f"cl_{subdomain}")
-            items = await page.evaluate(_CL_JS) or []
-            for item in items:
-                pid = item.get("pid", "") or item.get("url", "")
-                if not pid or pid in seen_pids:
-                    continue
-                title = item.get("title", "").strip()
-                if not title:
-                    continue
-                seen_pids.add(pid)
-                listings.append(Listing(
-                    title=title,
-                    url=item.get("url", ""),
-                    source=source,
-                    price=item.get("price", ""),
-                    time_left="",
-                    location=city_name,
-                    image_url=item.get("imageUrl", ""),
-                ))
-        except PlaywrightTimeout:
-            _log(f"[{source}] Timed out: {city_name}", "warning")
-        except Exception as e:
-            _log(f"[{source}] Error {city_name}: {e}", "error")
+    # Intercept image responses to capture URLs for lazy-loaded images.
+    # CL images follow: https://images.craigslist.org/d/{pid}/{hash}_{size}.jpg
+    pid_to_img: dict[str, str] = {}
+
+    def _on_response(response):
+        url = response.url
+        if "images.craigslist.org/d/" in url and "empty.png" not in url:
+            try:
+                pid = url.split("/d/")[1].split("/")[0]
+                pid_to_img.setdefault(pid, url)
+            except Exception:
+                pass
+
+    page.on("response", _on_response)
+
+    try:
+        for city_name, subdomain in CL_METROS:
+            url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}"
+            try:
+                # Large viewport set BEFORE navigation so IntersectionObserver fires
+                # for all results that fit within 20 000 px (~160-170 listings).
+                # Do NOT resize after load: flooding the network with hundreds of
+                # simultaneous image requests prevents networkidle from settling.
+                await page.set_viewport_size({"width": 1280, "height": 20000})
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                # Wait for image requests triggered by the initial render to settle
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except PlaywrightTimeout:
+                    pass
+                if debug:
+                    _save_debug(await page.content(), f"cl_{subdomain}")
+                items = await page.evaluate(_CL_JS) or []
+                for item in items:
+                    pid = item.get("pid", "")
+                    dedup_key = pid or item.get("url", "")
+                    if not dedup_key or dedup_key in seen_pids:
+                        continue
+                    title = item.get("title", "").strip()
+                    if not title:
+                        continue
+                    seen_pids.add(dedup_key)
+                    dom_img = item.get("imageUrl", "")
+                    image_url = pid_to_img.get(pid, "") or (dom_img if not dom_img.startswith("data:") else "")
+                    listings.append(Listing(
+                        title=title,
+                        url=item.get("url", ""),
+                        source=source,
+                        price=item.get("price", ""),
+                        time_left="",
+                        location=city_name,
+                        image_url=image_url,
+                    ))
+            except PlaywrightTimeout:
+                _log(f"[{source}] Timed out: {city_name}", "warning")
+            except Exception as e:
+                _log(f"[{source}] Error {city_name}: {e}", "error")
+    finally:
+        page.remove_listener("response", _on_response)
 
     return listings
 
