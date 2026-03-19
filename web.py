@@ -354,21 +354,19 @@ function tokenizeTitle(title) {
   )];
 }
 
-function buildTagCounts() {
+function renderTagBar(visibleListings) {
+  const bar = document.getElementById('tag-bar');
+  // Build counts only from non-CL listings that are currently visible.
+  // This ensures tags always correspond to results the user can see, and
+  // CL-only terms never pollute the tag bar.
+  const nonCL = visibleListings.filter(l => l.source !== 'Craigslist');
+  if(nonCL.length < 2) { bar.style.display='none'; return; }
   const counts = new Map();
-  for(const l of Object.values(st.bysite).flat().filter(l=>!st.ignored.has(l.short_id) && l.source!=='Craigslist')) {
+  for(const l of nonCL) {
     for(const t of tokenizeTitle(l.title)) counts.set(t, (counts.get(t)||0) + 1);
   }
-  return counts;
-}
-
-function renderTagBar() {
-  const all = Object.values(st.bysite).flat();
-  const bar = document.getElementById('tag-bar');
-  if(all.length < 2) { bar.style.display='none'; return; }
-  const counts = buildTagCounts();
   const tags = [...counts.entries()]
-    .filter(([,n]) => n >= 2 && n < all.length)
+    .filter(([,n]) => n >= 2 && n < nonCL.length)
     .sort((a,b) => a[0].localeCompare(b[0]))
     .slice(0, 60)
     .map(([t]) => t);
@@ -389,7 +387,6 @@ document.getElementById('tag-bar').addEventListener('click', e => {
   const cur = st.tagState.get(tag)||null;
   const next = cur===null ? 'require' : cur==='require' ? 'prohibit' : null;
   if(next===null) st.tagState.delete(tag); else st.tagState.set(tag, next);
-  renderTagBar();
   render();
 });
 
@@ -545,6 +542,7 @@ function urlToState() {
 
 function render(){
   const listings = allListings();
+  renderTagBar(listings);
   const si = startIdx(listings);
   const grid = document.getElementById('grid');
   if(!listings.length){ grid.innerHTML=''; stateToUrl(); return; }
@@ -594,7 +592,6 @@ function doSearch(e){
     const d=JSON.parse(ev.data);
     st.bysite[d.site]=d.listings||[];
     setSitePill(d.site, d.error?'error':'done', (d.error?'✕ ': d.listings.length+' · ')+SN[d.site]);
-    renderTagBar();
     render();
   });
   es.addEventListener('done',ev=>{
@@ -604,7 +601,6 @@ function doSearch(e){
     st.lastT=new Date().toLocaleTimeString();
     es.close(); st.es=null;
     document.getElementById('search-btn').disabled=false;
-    renderTagBar();
     render();
   });
   es.onerror=()=>{ es.close(); st.es=null; document.getElementById('search-btn').disabled=false; };
