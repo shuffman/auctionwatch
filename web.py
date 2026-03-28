@@ -2,10 +2,24 @@ import asyncio
 import json
 import os
 import queue
+import subprocess
 import sys
 import threading
 import webbrowser
 from urllib.parse import quote_plus
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+_VERSION = _git_sha()
 
 try:
     from playwright.async_api import async_playwright
@@ -93,7 +107,8 @@ _WEB_HTML = r"""<!DOCTYPE html>
       background: var(--bg2); border-bottom: 1px solid #1e1e1e;
       padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 0.75rem;
     }
-    .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; }
+    .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; display: flex; align-items: baseline; gap: 0.4rem; }
+    .version { font-size: 0.65rem; font-weight: 400; color: #444; font-family: monospace; }
     #sf { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; }
     #q {
       flex: 1; min-width: 0; background: #1e1e1e; border: 1px solid #2e2e2e;
@@ -258,7 +273,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <body>
 
 <header>
-  <div class="brand">AuctionWatch</div>
+  <div class="brand">AuctionWatch<span class="version">{{version}}</span></div>
   <form id="sf">
     <div id="search-wrap">
       <input id="q" type="text" placeholder="Search auctions…" autocomplete="off">
@@ -783,7 +798,7 @@ def serve_web(initial_query: str = "", port: int = 5173):
                 '<a href="/login" style="margin-left:auto;font-size:.75rem;color:#444;text-decoration:none;white-space:nowrap"'
                 ' onmouseover="this.style.color=\'#888\'" onmouseout="this.style.color=\'#444\'">Sign in</a>'
             )
-        return _WEB_HTML.replace("{{auth_link}}", auth_link)
+        return _WEB_HTML.replace("{{auth_link}}", auth_link).replace("{{version}}", _VERSION)
 
     @app.route("/api/search/stream")
     def search_stream():
