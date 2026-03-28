@@ -580,6 +580,7 @@ function urlToState() {
 function render(){
   const listings = allListings();
   renderTagBar(listings);
+  updateSiteCounts(listings);
   const si = startIdx(listings);
   const grid = document.getElementById('grid');
   if(!listings.length){ grid.innerHTML=''; stateToUrl(); return; }
@@ -603,7 +604,27 @@ function setSitePill(site, cls, text){
   let el=ss.querySelector(`[data-s="${site}"]`);
   if(!el){ el=document.createElement('div'); el.dataset.s=site; ss.appendChild(el); }
   el.className=`spill ${cls}`;
+  el.dataset.baseCls = cls;
+  el.dataset.shortName = SN[site] || site;
   el.innerHTML=cls==='loading'?`<div class="spin"></div> ${text}`:text;
+}
+
+function updateSiteCounts(visibleListings){
+  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Craigslist':'cl'};
+  const counts = {};
+  for(const l of visibleListings){ const k=siteKey[l.source]; if(k) counts[k]=(counts[k]||0)+1; }
+  const ss = document.getElementById('site-status');
+  ss.querySelectorAll('[data-s]').forEach(el => {
+    const site = el.dataset.s;
+    const cls  = el.dataset.baseCls;
+    if(cls !== 'done') return; // leave loading/error pills alone
+    const total   = (st.bysite[site]||[]).length;
+    const visible = counts[site] ?? 0;
+    const label   = el.dataset.shortName || SN[site] || site;
+    el.innerHTML  = visible === total
+      ? `${total} · ${label}`
+      : `${visible}/${total} · ${label}`;
+  });
 }
 
 function doSearch(e){
