@@ -407,69 +407,71 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list
     seen_pids: set[str] = set()
     seen_titles: set[str] = set()
 
-    # Intercept image responses to capture URLs for lazy-loaded images.
-    # CL images follow: https://images.craigslist.org/d/{pid}/{hash}_{size}.jpg
-    pid_to_img: dict[str, str] = {}
-
-    def _on_response(response):
-        url = response.url
-        if "images.craigslist.org/d/" in url and "empty.png" not in url:
-            try:
-                pid = url.split("/d/")[1].split("/")[0]
-                pid_to_img.setdefault(pid, url)
-            except Exception:
-                pass
-
-    page.on("response", _on_response)
-
-    try:
-        for city_name, subdomain in CL_METROS:
-            url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}"
-            try:
-                # Large viewport set BEFORE navigation so IntersectionObserver fires
-                # for all results that fit within 20 000 px (~160-170 listings).
-                # Do NOT resize after load: flooding the network with hundreds of
-                # simultaneous image requests prevents networkidle from settling.
-                await page.set_viewport_size({"width": 1280, "height": 20000})
-                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                # Wait for image requests triggered by the initial render to settle
+    # Each metro gets its own page and pid_to_img dict.
+    # _on_response is a factory that closes over the per-metro dict.
+    def _on_response(pid_to_img: dict):
+        def handler(response):
+            url = response.url
+            if "images.craigslist.org/d/" in url and "empty.png" not in url:
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=8000)
-                except PlaywrightTimeout:
+                    pid = url.split("/d/")[1].split("/")[0]
+                    pid_to_img.setdefault(pid, url)
+                except Exception:
                     pass
-                if debug:
-                    _save_debug(await page.content(), f"cl_{subdomain}")
-                items = await page.evaluate(_CL_JS) or []
-                for item in items:
-                    pid = item.get("pid", "")
-                    dedup_key = pid or item.get("url", "")
-                    if not dedup_key or dedup_key in seen_pids:
-                        continue
-                    title = item.get("title", "").strip()
-                    if not title:
-                        continue
-                    title_key = title.lower()
-                    if title_key in seen_titles:
-                        continue
-                    seen_pids.add(dedup_key)
-                    seen_titles.add(title_key)
-                    dom_img = item.get("imageUrl", "")
-                    image_url = pid_to_img.get(pid, "") or (dom_img if not dom_img.startswith("data:") else "")
-                    listings.append(Listing(
-                        title=title,
-                        url=item.get("url", ""),
-                        source=source,
-                        price=item.get("price", ""),
-                        time_left="",
-                        location=city_name,
-                        image_url=image_url,
-                    ))
+        return handler
+
+    ctx = page.context
+
+    for city_name, subdomain in CL_METROS:
+        url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}"
+        # Fresh page per metro: clears cookies/session so CL can't correlate
+        # requests across subdomains and rate-limit after the first hit.
+        p = await ctx.new_page()
+        pid_to_img: dict[str, str] = {}
+        p.on("response", _on_response(pid_to_img))
+        try:
+            # Large viewport set BEFORE navigation so IntersectionObserver fires
+            # for all results that fit within 20 000 px (~160-170 listings).
+            await p.set_viewport_size({"width": 1280, "height": 20000})
+            await p.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # Wait for image requests triggered by the initial render to settle
+            try:
+                await p.wait_for_load_state("networkidle", timeout=8000)
             except PlaywrightTimeout:
-                _log(f"[{source}] Timed out: {city_name}", "warning")
-            except Exception as e:
-                _log(f"[{source}] Error {city_name}: {e}", "error")
-    finally:
-        page.remove_listener("response", _on_response)
+                pass
+            if debug:
+                _save_debug(await p.content(), f"cl_{subdomain}")
+            items = await p.evaluate(_CL_JS) or []
+            for item in items:
+                pid = item.get("pid", "")
+                dedup_key = pid or item.get("url", "")
+                if not dedup_key or dedup_key in seen_pids:
+                    continue
+                title = item.get("title", "").strip()
+                if not title:
+                    continue
+                title_key = title.lower()
+                if title_key in seen_titles:
+                    continue
+                seen_pids.add(dedup_key)
+                seen_titles.add(title_key)
+                dom_img = item.get("imageUrl", "")
+                image_url = pid_to_img.get(pid, "") or (dom_img if not dom_img.startswith("data:") else "")
+                listings.append(Listing(
+                    title=title,
+                    url=item.get("url", ""),
+                    source=source,
+                    price=item.get("price", ""),
+                    time_left="",
+                    location=city_name,
+                    image_url=image_url,
+                ))
+        except PlaywrightTimeout:
+            _log(f"[{source}] Timed out: {city_name}", "warning")
+        except Exception as e:
+            _log(f"[{source}] Error {city_name}: {e}", "error")
+        finally:
+            await p.close()
 
     return listings
 
