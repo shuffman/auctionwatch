@@ -805,17 +805,21 @@ def serve_web(initial_query: str = "", port: int = 5173):
         def _run():
             async def _scrape():
                 active = {k: v for k, v in ALL_SITES.items() if k in sites}
-                async with async_playwright() as pw:
+                auction_sites = {k: v for k, v in active.items() if k != "cl"}
+                cl_sites      = {k: v for k, v in active.items() if k == "cl"}
+
+                UA = (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                )
+
+                async def _run_auction_sites(pw):
+                    if not auction_sites:
+                        return
                     browser = await pw.chromium.launch(headless=True)
-                    ctx = await browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/122.0.0.0 Safari/537.36"
-                        ),
-                        viewport={"width": 1280, "height": 900},
-                    )
-                    pages = await asyncio.gather(*[ctx.new_page() for _ in active])
+                    ctx = await browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 900})
+                    pages = await asyncio.gather(*[ctx.new_page() for _ in auction_sites])
 
                     async def _one(i, key, name, scraper_fn):
                         try:
@@ -828,9 +832,31 @@ def serve_web(initial_query: str = "", port: int = 5173):
 
                     await asyncio.gather(*[
                         _one(i, k, name, fn)
-                        for i, (k, (name, _, fn)) in enumerate(active.items())
+                        for i, (k, (name, _, fn)) in enumerate(auction_sites.items())
                     ])
                     await browser.close()
+
+                async def _run_cl(pw):
+                    if not cl_sites:
+                        return
+                    # CL gets its own browser — it hammers the network with large
+                    # viewports and hundreds of image requests across 8 metros,
+                    # which starves concurrent auction-site scrapers.
+                    browser = await pw.chromium.launch(headless=True)
+                    ctx = await browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 900})
+                    page = await ctx.new_page()
+                    for key, (name, _, scraper_fn) in cl_sites.items():
+                        try:
+                            listings = await scraper_fn(page, q, False)
+                            if act_only:
+                                listings = [l for l in listings if l.is_active is not False]
+                            result_q.put({"site": key, "listings": [_listing_json(l) for l in listings]})
+                        except Exception as exc:
+                            result_q.put({"site": key, "listings": [], "error": str(exc)})
+                    await browser.close()
+
+                async with async_playwright() as pw:
+                    await asyncio.gather(_run_auction_sites(pw), _run_cl(pw))
                 result_q.put(None)
 
             loop = asyncio.new_event_loop()
