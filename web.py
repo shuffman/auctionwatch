@@ -627,14 +627,14 @@ function updateSiteCounts(visibleListings){
   });
 }
 
-function doSearch(e){
+function doSearch(e, keepTags=false){
   if(e) e.preventDefault();
   const q=document.getElementById('q').value.trim();
   if(!q) return;
   const sites=activeSites();
   if(!sites.length) return;
   if(st.es){ st.es.close(); st.es=null; }
-  st.bysite={}; st.lastQ=q; st.lastT=''; st.tagState=new Map();
+  st.bysite={}; st.lastQ=q; st.lastT=''; if(!keepTags) st.tagState=new Map();
   stateToUrl();
   document.getElementById('search-btn').disabled=true;
   document.getElementById('grid').innerHTML='';
@@ -755,7 +755,7 @@ qEl.addEventListener('input', () => { rsEl.classList.remove('open'); });
 const initQ = urlToState();
 fetch('/api/store').then(r=>r.json()).then(d=>{
   st.serverStart=d.start||''; st.starred=new Set(d.starred||[]); st.ignored=new Set(d.ignored||[]);
-  if(initQ) doSearch(null);
+  if(initQ) doSearch(null, true);
 });
 fetch('/api/searches').then(r=>r.json()).then(d=>{ recentSearches = d.searches||[]; });
 </script>
