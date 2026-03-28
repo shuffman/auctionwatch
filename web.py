@@ -10,6 +10,10 @@ from urllib.parse import quote_plus
 
 
 def _git_sha() -> str:
+    # Railway injects the full SHA as an env var; fall back to local git
+    sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")
+    if sha:
+        return sha[:7]
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
