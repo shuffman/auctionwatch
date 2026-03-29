@@ -10,18 +10,22 @@ from urllib.parse import quote_plus
 
 
 def _git_sha() -> str:
-    # Railway injects the full SHA as an env var; fall back to local git
-    sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")
-    if sha:
-        return sha[:7]
+    # version.py is committed to the repo and copied into the Docker image,
+    # so it works in all environments including Railway where .git isn't present.
+    try:
+        from version import __version__
+        return __version__
+    except ImportError:
+        pass
+    # Local fallback: use git describe to get tag+distance or plain SHA
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "describe", "--tags", "--always"],
             stderr=subprocess.DEVNULL,
             cwd=os.path.dirname(os.path.abspath(__file__)),
         ).decode().strip()
     except Exception:
-        return "unknown"
+        return os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown")[:7]
 
 _VERSION = _git_sha()
 
