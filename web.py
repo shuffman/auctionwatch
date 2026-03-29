@@ -510,12 +510,14 @@ function allListings(){
       return true;
     });
   }
-  // Tag filters
+  // Tag filters — snapshot pre-tag list so the tag bar can show all relevant tags
+  const preTagAll = all.slice();
   for(const [tag, state] of st.tagState) {
     const re = new RegExp('\\b' + tag.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\b', 'i');
     if(state==='require')  all = all.filter(l => re.test(l.title));
     if(state==='prohibit') all = all.filter(l => !re.test(l.title));
   }
+  all._preTag = preTagAll;
   const sortBy = document.getElementById('sort-by').value;
   if(sortBy === 'price_asc')  return all.sort((a,b) => (parsePrice(a.price)??Infinity) - (parsePrice(b.price)??Infinity));
   if(sortBy === 'price_desc') return all.sort((a,b) => (parsePrice(b.price)??-1)       - (parsePrice(a.price)??-1));
@@ -622,7 +624,7 @@ function urlToState() {
 
 function render(){
   const listings = allListings();
-  renderTagBar(listings);
+  renderTagBar(listings._preTag || listings);
   updateSiteCounts(listings);
   const si = startIdx(listings);
   const grid = document.getElementById('grid');
