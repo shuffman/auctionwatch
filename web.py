@@ -5,6 +5,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from urllib.parse import quote_plus
 
@@ -45,7 +46,7 @@ from store import (
     _db_get_start, _db_set_start,
     _db_save_search, _db_get_searches,
 )
-from scrapers import HAS_RICH, _console, stealth_playwright
+from scrapers import HAS_RICH, _console, stealth_playwright, CL_METROS
 
 
 _LOGIN_HTML = r"""<!DOCTYPE html>
@@ -205,6 +206,19 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .spill.loading { animation: pulse 1.2s infinite; }
     .spill.done   { color: var(--green); border-color: rgba(0,230,118,0.3); }
     .spill.error  { color: var(--red);   border-color: rgba(255,82,82,0.3); }
+    .spill-wrap { position: relative; display: inline-flex; }
+    .spill-tip {
+      display: none; position: absolute; bottom: calc(100% + 7px); right: 0;
+      background: #161616; border: 1px solid #2a2a2a; border-radius: 7px;
+      padding: 0.55rem 0.75rem; font-size: 0.72rem; color: #aaa;
+      white-space: nowrap; z-index: 200; min-width: 200px; line-height: 1.75;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.55); pointer-events: none;
+    }
+    .spill-wrap:hover .spill-tip { display: block; }
+    .spill-tip b { color: var(--text); }
+    .spill-tip .tip-row { display: flex; gap: 0.5rem; justify-content: space-between; }
+    .spill-tip .tip-label { color: #444; }
+    .spill-tip .tip-err { color: var(--red); word-break: break-word; white-space: normal; max-width: 260px; }
     .spin { width: 8px; height: 8px; border: 1.5px solid #333; border-top-color: currentColor;
             border-radius: 50%; animation: spin 0.7s linear infinite; }
     @keyframes spin  { to { transform: rotate(360deg); } }
@@ -355,7 +369,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <script>
 const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0','Craigslist':'#ff9800','Cars.com':'#e91e63'};
 const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar', cl:'CL', carscom:'Cars.com'};
-let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set(), tagState:new Map() };
+let st = { bysite:{}, siteData:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set(), tagState:new Map() };
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
@@ -628,14 +642,41 @@ function render(){
   stateToUrl();
 }
 
+function buildSpillTip(site) {
+  const d = st.siteData[site];
+  const fullName = {'cab':'Cars & Bids','bat':'Bring a Trailer','hagerty':'Hagerty','pcar':'PCar Market','cl':'Craigslist','carscom':'Cars.com'}[site] || site;
+  if(!d) return `<b>${fullName}</b><br><span class="tip-label">Loading…</span>`;
+  const s = d.stats || {};
+  const count = (st.bysite[site]||[]).length;
+  const rows = [`<b>${fullName}</b>`];
+  rows.push(`<div class="tip-row"><span class="tip-label">Listings</span><span>${count}</span></div>`);
+  if(s.elapsed !== undefined)
+    rows.push(`<div class="tip-row"><span class="tip-label">Elapsed</span><span>${s.elapsed}s</span></div>`);
+  if(s.metros !== undefined)
+    rows.push(`<div class="tip-row"><span class="tip-label">Metros</span><span>${s.metros}</span></div>`);
+  if(d.error)
+    rows.push(`<div class="tip-err">✕ ${esc(d.error)}</div>`);
+  return rows.join('');
+}
+
 function setSitePill(site, cls, text){
-  const ss=document.getElementById('site-status');
-  let el=ss.querySelector(`[data-s="${site}"]`);
-  if(!el){ el=document.createElement('div'); el.dataset.s=site; ss.appendChild(el); }
-  el.className=`spill ${cls}`;
+  const ss = document.getElementById('site-status');
+  let wrap = ss.querySelector(`[data-sw="${site}"]`);
+  if(!wrap){
+    wrap = document.createElement('div');
+    wrap.className = 'spill-wrap';
+    wrap.dataset.sw = site;
+    ss.appendChild(wrap);
+  }
+  let el = wrap.querySelector('.spill');
+  if(!el){ el = document.createElement('div'); el.dataset.s = site; wrap.appendChild(el); }
+  let tip = wrap.querySelector('.spill-tip');
+  if(!tip){ tip = document.createElement('div'); tip.className = 'spill-tip'; wrap.appendChild(tip); }
+  el.className = `spill ${cls}`;
   el.dataset.baseCls = cls;
   el.dataset.shortName = SN[site] || site;
-  el.innerHTML=cls==='loading'?`<div class="spin"></div> ${text}`:text;
+  el.innerHTML = cls === 'loading' ? `<div class="spin"></div> ${text}` : text;
+  tip.innerHTML = buildSpillTip(site);
 }
 
 function updateSiteCounts(visibleListings){
@@ -643,9 +684,12 @@ function updateSiteCounts(visibleListings){
   const counts = {};
   for(const l of visibleListings){ const k=siteKey[l.source]; if(k) counts[k]=(counts[k]||0)+1; }
   const ss = document.getElementById('site-status');
-  ss.querySelectorAll('[data-s]').forEach(el => {
-    const site = el.dataset.s;
-    const cls  = el.dataset.baseCls;
+  ss.querySelectorAll('.spill-wrap').forEach(wrap => {
+    const site = wrap.dataset.sw;
+    const el   = wrap.querySelector('.spill');
+    const tip  = wrap.querySelector('.spill-tip');
+    if(!el) return;
+    const cls = el.dataset.baseCls;
     if(cls !== 'done') return; // leave loading/error pills alone
     const total   = (st.bysite[site]||[]).length;
     const visible = counts[site] ?? 0;
@@ -653,6 +697,7 @@ function updateSiteCounts(visibleListings){
     el.innerHTML  = visible === total
       ? `${total} · ${label}`
       : `${visible}/${total} · ${label}`;
+    if(tip) tip.innerHTML = buildSpillTip(site);
   });
 }
 
@@ -663,7 +708,7 @@ function doSearch(e, keepTags=false){
   const sites=activeSites();
   if(!sites.length) return;
   if(st.es){ st.es.close(); st.es=null; }
-  st.bysite={}; st.lastQ=q; st.lastT=''; if(!keepTags) st.tagState=new Map();
+  st.bysite={}; st.siteData={}; st.lastQ=q; st.lastT=''; if(!keepTags) st.tagState=new Map();
   stateToUrl();
   document.getElementById('search-btn').disabled=true;
   document.getElementById('grid').innerHTML='';
@@ -678,6 +723,7 @@ function doSearch(e, keepTags=false){
   es.addEventListener('site',ev=>{
     const d=JSON.parse(ev.data);
     st.bysite[d.site]=d.listings||[];
+    st.siteData[d.site]=d;
     setSitePill(d.site, d.error?'error':'done', (d.error?'✕ ': d.listings.length+' · ')+SN[d.site]);
     render();
   });
@@ -887,13 +933,18 @@ def serve_web(initial_query: str = "", port: int = 5173):
                     pages = await asyncio.gather(*[ctx.new_page() for _ in auction_sites])
 
                     async def _one(i, key, name, scraper_fn):
+                        t0 = time.time()
                         try:
                             listings = await scraper_fn(pages[i], q, False)
+                            elapsed = round(time.time() - t0, 1)
                             if act_only:
                                 listings = [l for l in listings if l.is_active is not False]
-                            result_q.put({"site": key, "listings": [_listing_json(l) for l in listings]})
+                            result_q.put({"site": key, "listings": [_listing_json(l) for l in listings],
+                                          "stats": {"elapsed": elapsed, "total": len(listings)}})
                         except Exception as exc:
-                            result_q.put({"site": key, "listings": [], "error": str(exc)})
+                            elapsed = round(time.time() - t0, 1)
+                            result_q.put({"site": key, "listings": [], "error": str(exc),
+                                          "stats": {"elapsed": elapsed, "total": 0}})
 
                     await asyncio.gather(*[
                         _one(i, k, name, fn)
@@ -911,13 +962,19 @@ def serve_web(initial_query: str = "", port: int = 5173):
                     ctx = await browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 900})
                     page = await ctx.new_page()
                     for key, (name, _, scraper_fn) in cl_sites.items():
+                        t0 = time.time()
                         try:
                             listings = await scraper_fn(page, q, False)
+                            elapsed = round(time.time() - t0, 1)
                             if act_only:
                                 listings = [l for l in listings if l.is_active is not False]
-                            result_q.put({"site": key, "listings": [_listing_json(l) for l in listings]})
+                            result_q.put({"site": key, "listings": [_listing_json(l) for l in listings],
+                                          "stats": {"elapsed": elapsed, "total": len(listings),
+                                                    "metros": len(CL_METROS)}})
                         except Exception as exc:
-                            result_q.put({"site": key, "listings": [], "error": str(exc)})
+                            elapsed = round(time.time() - t0, 1)
+                            result_q.put({"site": key, "listings": [], "error": str(exc),
+                                          "stats": {"elapsed": elapsed, "total": 0}})
                     await browser.close()
 
                 async with stealth_playwright() as pw:
