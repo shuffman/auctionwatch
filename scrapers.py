@@ -427,34 +427,47 @@ _CARS_COM_JS = """() => {
 async def scrape_cars_com(page: Page, query: str, debug: bool = False) -> list[Listing]:
     source = "Cars.com"
     listings = []
-    # Use maximum_distance=all for nationwide results; stock_type=all for new+used
-    url = (
+    seen_urls: set[str] = set()
+    base_url = (
         f"https://www.cars.com/shopping/results/"
         f"?keyword={quote_plus(query)}&stock_type=all&maximum_distance=all"
     )
     try:
-        _log(f"[{source}] Fetching {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_selector('fuse-card[id^="vehicle-card-"]', timeout=15000)
-        _log(f"[{source}] Page loaded, extracting listings")
-        if debug:
-            _save_debug(await page.content(), "cars_com")
-        items = await page.evaluate(_CARS_COM_JS) or []
-        for item in items:
-            title = item.get("title", "").strip()
-            item_url = item.get("url", "")
-            if not title or not item_url:
-                continue
-            listings.append(Listing(
-                title=title,
-                url=item_url,
-                source=source,
-                price=item.get("price", ""),
-                mileage=item.get("mileage", ""),
-                location=item.get("location", ""),
-                time_left="",
-                image_url=item.get("imageUrl", ""),
-            ))
+        for page_num in range(1, 11):  # cap at 10 pages (~200 results)
+            url = base_url if page_num == 1 else f"{base_url}&page={page_num}"
+            _log(f"[{source}] Fetching page {page_num}: {url}")
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                await page.wait_for_selector('fuse-card[id^="vehicle-card-"]', timeout=15000)
+            except PlaywrightTimeout:
+                _log(f"[{source}] No results on page {page_num}, stopping")
+                break
+            if debug and page_num == 1:
+                _save_debug(await page.content(), "cars_com")
+            items = await page.evaluate(_CARS_COM_JS) or []
+            if not items:
+                break
+            new_count = 0
+            for item in items:
+                title = item.get("title", "").strip()
+                item_url = item.get("url", "")
+                if not title or not item_url or item_url in seen_urls:
+                    continue
+                seen_urls.add(item_url)
+                new_count += 1
+                listings.append(Listing(
+                    title=title,
+                    url=item_url,
+                    source=source,
+                    price=item.get("price", ""),
+                    mileage=item.get("mileage", ""),
+                    location=item.get("location", ""),
+                    time_left="",
+                    image_url=item.get("imageUrl", ""),
+                ))
+            _log(f"[{source}] Page {page_num}: {new_count} new listings (total {len(listings)})")
+            if new_count == 0:
+                break  # no new results — we've exhausted the pages
         _log(f"[{source}] Done — {len(listings)} listings")
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out", "warning")
