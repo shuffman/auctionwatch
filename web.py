@@ -168,7 +168,6 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .pill[data-site="hagerty"].on { color: #2196f3; border-color: rgba(33,150,243,0.5); background: rgba(33,150,243,0.07); }
     .pill[data-site="pcar"].on { color: #9c27b0; border-color: rgba(156,39,176,0.5); background: rgba(156,39,176,0.07); }
     .pill[data-site="cl"].on   { color: #ff9800; border-color: rgba(255,152,0,0.5);  background: rgba(255,152,0,0.07); }
-    .pill[data-site].prohibit { color: var(--red); border-color: rgba(255,82,82,0.4); background: rgba(255,82,82,0.06); }
     .pill[data-filter="cars"].on    { color: var(--accent); border-color: rgba(0,188,212,0.45); background: rgba(0,188,212,0.07); }
     .pill[data-filter="active"].on  { color: var(--green);  border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
     .pill[data-filter="starred"].on { color: var(--yellow); border-color: rgba(230,200,74,0.45); background: rgba(230,200,74,0.07); }
@@ -342,7 +341,7 @@ let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ign
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
-function activeSites(){ return [...document.querySelectorAll('#spills .pill')].filter(p=>!p.classList.contains('prohibit')).map(p=>p.dataset.site) }
+function activeSites(){ return [...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site) }
 
 function tlMinutes(tl){
   const t=(tl||'').trim();
@@ -448,15 +447,9 @@ function allListings(){
   const starredOnly = isStarredOnly();
   const ignoredOnly = isIgnoredOnly();
   const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Craigslist':'cl'};
-  const reqSites  = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
-  const probSites = new Set([...document.querySelectorAll('#spills .pill.prohibit')].map(p=>p.dataset.site));
+  const onSites = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
   let all = ['cab','bat','hagerty','pcar','cl'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
-  all = all.filter(l => {
-    const k = siteKey[l.source]||'';
-    if(probSites.has(k)) return false;
-    if(reqSites.size > 0 && !reqSites.has(k)) return false;
-    return true;
-  });
+  if(onSites.size > 0) all = all.filter(l => onSites.has(siteKey[l.source]||''));
   if(carsOnly)    all = all.filter(l => YEAR_RE.test(l.title));
   if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; if(!t) return true; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
   if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
@@ -536,17 +529,9 @@ function stateToUrl() {
   const p = new URLSearchParams();
   const q = document.getElementById('q').value.trim();
   if(q) p.set('q', q);
-  // Sites: only encode if not all-required (the default)
-  const req=[], proh=[];
-  document.querySelectorAll('#spills .pill').forEach(pill => {
-    if(pill.classList.contains('on')) req.push(pill.dataset.site);
-    else if(pill.classList.contains('prohibit')) proh.push(pill.dataset.site);
-  });
-  const allSites = ['cab','bat','hagerty','pcar','cl'];
-  if(req.length < allSites.length || proh.length > 0) {
-    if(req.length)  p.set('s',  req.join(','));
-    if(proh.length) p.set('xs', proh.join(','));
-  }
+  // Sites: only encode when not all selected (the default)
+  const on = [...document.querySelectorAll('#spills .pill.on')].map(pill=>pill.dataset.site);
+  if(on.length < 5) p.set('s', on.join(','));
   // Filter pills: only encode non-defaults (active defaults ON, others OFF)
   if(!document.querySelector('[data-filter="cars"].on'))     p.set('cars',     '0');
   if(!document.querySelector('[data-filter="active"].on'))   p.set('active',   '0');
@@ -570,16 +555,11 @@ function urlToState() {
   const q = p.get('q') || '';
   if(q) document.getElementById('q').value = q;
   // Sites
-  const s  = p.get('s'),  xs = p.get('xs');
-  if(s !== null || xs !== null) {
-    const req  = new Set((s  || '').split(',').filter(Boolean));
-    const proh = new Set((xs || '').split(',').filter(Boolean));
+  const s = p.get('s');
+  if(s !== null) {
+    const on = new Set(s.split(',').filter(Boolean));
     document.querySelectorAll('#spills .pill').forEach(pill => {
-      const site = pill.dataset.site;
-      pill.classList.remove('on','prohibit');
-      if(proh.has(site))      { pill.classList.add('prohibit'); pill.textContent = pill.dataset.label+' ✕'; }
-      else if(req.has(site))  { pill.classList.add('on');       pill.textContent = pill.dataset.label+' ✓'; }
-      else                    {                                  pill.textContent = pill.dataset.label; }
+      pill.classList.toggle('on', on.has(pill.dataset.site));
     });
   }
   // Filter pills
@@ -722,14 +702,10 @@ async function starCard(id, e){
 
 document.getElementById('sf').addEventListener('submit', doSearch);
 
-// Site pills: three-state cycle require(.on) → neutral → prohibit → require
+// Site pills: simple on/off toggle
 document.querySelectorAll('#spills .pill').forEach(p=>p.addEventListener('click',()=>{
-  const cur = p.classList.contains('on') ? 'require' : p.classList.contains('prohibit') ? 'prohibit' : 'neutral';
-  const next = cur==='require' ? 'neutral' : cur==='neutral' ? 'prohibit' : 'require';
-  p.classList.remove('on','prohibit');
-  if(next==='require') p.classList.add('on');
-  if(next==='prohibit') p.classList.add('prohibit');
-  p.textContent = p.dataset.label + (next==='require' ? ' ✓' : next==='prohibit' ? ' ✕' : '');
+  p.classList.toggle('on');
+  p.textContent = p.dataset.label;
   render();
 }));
 
