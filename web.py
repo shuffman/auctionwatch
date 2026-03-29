@@ -181,6 +181,11 @@ _WEB_HTML = r"""<!DOCTYPE html>
     #filters input[type=number]::-webkit-inner-spin-button,
     #filters input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
     #filters input[type=number] { -moz-appearance: textfield; }
+    #sort-by {
+      background: #171717; border: 1px solid #252525; border-radius: 4px;
+      padding: 0.22rem 0.4rem; color: #aaa; font-size: 0.71rem; outline: none; cursor: pointer;
+    }
+    #sort-by:focus { border-color: var(--accent); color: var(--text); }
 
     /* ── Status / loading bar ── */
     #infobar {
@@ -327,6 +332,17 @@ _WEB_HTML = r"""<!DOCTYPE html>
     <span class="fdash">–</span>
     <input type="number" id="price-hi" placeholder="Max" min="0" step="500">
   </div>
+  <div class="fsep"></div>
+  <div class="fg">
+    <span class="flabel">Sort</span>
+    <select id="sort-by">
+      <option value="time">Time left</option>
+      <option value="price_asc">Price ↑</option>
+      <option value="price_desc">Price ↓</option>
+      <option value="year_asc">Year ↑</option>
+      <option value="year_desc">Year ↓</option>
+    </select>
+  </div>
 </div>
 
 <div id="infobar">
@@ -381,6 +397,7 @@ function parsePrice(priceStr) {
 ['year-lo','year-hi','price-lo','price-hi'].forEach(id => {
   document.getElementById(id).addEventListener('input', render);
 });
+document.getElementById('sort-by').addEventListener('change', render);
 
 const STOP = new Set([
   'a','an','the','and','or','with','for','in','on','at','by','to','of','is','as','no','not',
@@ -485,7 +502,12 @@ function allListings(){
     if(state==='require')  all = all.filter(l => re.test(l.title));
     if(state==='prohibit') all = all.filter(l => !re.test(l.title));
   }
-  return all.sort((a,b)=>tlMinutes(a.time_left)-tlMinutes(b.time_left));
+  const sortBy = document.getElementById('sort-by').value;
+  if(sortBy === 'price_asc')  return all.sort((a,b) => (parsePrice(a.price)??Infinity) - (parsePrice(b.price)??Infinity));
+  if(sortBy === 'price_desc') return all.sort((a,b) => (parsePrice(b.price)??-1)       - (parsePrice(a.price)??-1));
+  if(sortBy === 'year_asc')   return all.sort((a,b) => (extractYear(a.title)??0)        - (extractYear(b.title)??0));
+  if(sortBy === 'year_desc')  return all.sort((a,b) => (extractYear(b.title)??9999)     - (extractYear(a.title)??9999));
+  return all.sort((a,b)=>tlMinutes(a.time_left)-tlMinutes(b.time_left)); // default: time
 }
 
 function startIdx(listings){
@@ -542,6 +564,9 @@ function stateToUrl() {
   // Ranges
   const rangeMap = {'ylo':'year-lo','yhi':'year-hi','plo':'price-lo','phi':'price-hi'};
   for(const [key,id] of Object.entries(rangeMap)) { const v=document.getElementById(id).value; if(v) p.set(key,v); }
+  // Sort
+  const sortVal = document.getElementById('sort-by').value;
+  if(sortVal !== 'time') p.set('sort', sortVal);
   // Tag states
   const tr=[], tp=[];
   for(const [tag,state] of st.tagState) { if(state==='require') tr.push(tag); else if(state==='prohibit') tp.push(tag); }
@@ -572,6 +597,9 @@ function urlToState() {
   // Ranges
   const rangeMap = {'ylo':'year-lo','yhi':'year-hi','plo':'price-lo','phi':'price-hi'};
   for(const [key,id] of Object.entries(rangeMap)) { const v=p.get(key); if(v) document.getElementById(id).value=v; }
+  // Sort
+  const sortParam = p.get('sort');
+  if(sortParam) { const el = document.getElementById('sort-by'); if(el) el.value = sortParam; }
   // Tags
   for(const tag of (p.get('tr')||'').split(',').filter(Boolean)) st.tagState.set(tag,'require');
   for(const tag of (p.get('tp')||'').split(',').filter(Boolean)) st.tagState.set(tag,'prohibit');
