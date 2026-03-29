@@ -22,11 +22,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 try:
-    from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+    from playwright.async_api import TimeoutError as PlaywrightTimeout
 except ImportError:
     print("Error: playwright not installed.")
     print("Run: pip install playwright && playwright install chromium")
     sys.exit(1)
+
+from scrapers import stealth_playwright
 
 from models import Listing, SOURCE_COLORS_RICH, SOURCE_COLORS_HTML
 from store import (
@@ -94,7 +96,7 @@ async def _scrape_all(
 ) -> list[Listing]:
     """Run all scrapers in parallel; return combined listings."""
     active = {k: v for k, v in ALL_SITES.items() if k in site_keys}
-    async with async_playwright() as pw:
+    async with stealth_playwright() as pw:
         browser = await pw.chromium.launch(headless=not debug)
         context = await browser.new_context(
             user_agent=(

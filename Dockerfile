@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 # Install Playwright + Chromium system dependencies, then clean up apt cache
-RUN pip install --no-cache-dir playwright rich flask \
+RUN pip install --no-cache-dir playwright playwright-stealth rich flask \
  && playwright install chromium --with-deps \
  && rm -rf /var/lib/apt/lists/*
 

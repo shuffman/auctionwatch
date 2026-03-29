@@ -30,7 +30,7 @@ def _git_sha() -> str:
 _VERSION = _git_sha()
 
 try:
-    from playwright.async_api import async_playwright
+    from playwright.async_api import async_playwright  # noqa: F401 (imported for re-export)
 except ImportError:
     print("Error: playwright not installed.")
     print("Run: pip install playwright && playwright install chromium")
@@ -45,7 +45,7 @@ from store import (
     _db_get_start, _db_set_start,
     _db_save_search, _db_get_searches,
 )
-from scrapers import HAS_RICH, _console
+from scrapers import HAS_RICH, _console, stealth_playwright
 
 
 _LOGIN_HTML = r"""<!DOCTYPE html>
@@ -914,7 +914,7 @@ def serve_web(initial_query: str = "", port: int = 5173):
                             result_q.put({"site": key, "listings": [], "error": str(exc)})
                     await browser.close()
 
-                async with async_playwright() as pw:
+                async with stealth_playwright() as pw:
                     await asyncio.gather(_run_auction_sites(pw), _run_cl(pw))
                 result_q.put(None)
 

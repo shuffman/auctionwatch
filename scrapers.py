@@ -10,6 +10,20 @@ except ImportError:
     sys.exit(1)
 
 try:
+    from playwright_stealth import Stealth
+    _STEALTH = Stealth()
+    HAS_STEALTH = True
+except ImportError:
+    _STEALTH = None
+    HAS_STEALTH = False
+
+
+def stealth_playwright():
+    """Return a playwright context manager with stealth applied if available."""
+    pw = async_playwright()
+    return _STEALTH.use_async(pw) if HAS_STEALTH else pw
+
+try:
     from rich.console import Console
     _console = Console()
     HAS_RICH = True
