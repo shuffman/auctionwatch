@@ -117,7 +117,8 @@ _WEB_HTML = r"""<!DOCTYPE html>
     }
     .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; display: flex; align-items: baseline; gap: 0.4rem; }
     .version { font-size: 0.65rem; font-weight: 400; color: #444; font-family: monospace; }
-    #sf { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; }
+    #sf { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-width: 0; }
+    .sf-row { display: flex; align-items: center; gap: 0.5rem; }
     #q {
       flex: 1; min-width: 0; background: #1e1e1e; border: 1px solid #2e2e2e;
       border-radius: 6px; padding: 0.42rem 0.75rem; color: var(--text); font-size: 0.9rem; outline: none;
@@ -284,17 +285,13 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <header>
   <div class="brand">AuctionWatch<span class="version">{{version}}</span></div>
   <form id="sf">
-    <div id="search-wrap">
-      <input id="q" type="text" placeholder="Search auctions…" autocomplete="off">
-      <div id="recent-searches"></div>
+    <div class="sf-row">
+      <div id="search-wrap">
+        <input id="q" type="text" placeholder="Search auctions…" autocomplete="off">
+        <div id="recent-searches"></div>
+      </div>
+      <button type="submit" id="search-btn">Search</button>
     </div>
-    <button type="submit" id="search-btn">Search</button>
-  </form>
-  {{auth_link}}
-</header>
-
-<div id="filters">
-  <div class="fg">
     <div class="pills" id="spills">
       <div class="pill on" data-site="cab"     data-label="C&amp;B">C&amp;B</div>
       <div class="pill on" data-site="bat"     data-label="BaT">BaT</div>
@@ -302,8 +299,11 @@ _WEB_HTML = r"""<!DOCTYPE html>
       <div class="pill on" data-site="pcar"    data-label="PCar">PCar</div>
       <div class="pill on" data-site="cl"      data-label="CL">CL</div>
     </div>
-  </div>
-  <div class="fsep"></div>
+  </form>
+  {{auth_link}}
+</header>
+
+<div id="filters">
   <div class="fg">
     <div class="pills">
       <div class="pill on" data-filter="cars">Cars only</div>
