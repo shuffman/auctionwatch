@@ -531,7 +531,7 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list
     ctx = page.context
 
     for city_name, subdomain in CL_METROS:
-        url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}"
+        url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}&srchType=T&bundleDuplicates=1"
         # Fresh page per metro: clears cookies/session so CL can't correlate
         # requests across subdomains and rate-limit after the first hit.
         p = await ctx.new_page()
