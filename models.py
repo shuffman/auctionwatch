@@ -49,4 +49,5 @@ SOURCE_COLORS_HTML = {
     "Hagerty": "#2196f3",
     "PCar Market": "#9c27b0",
     "Craigslist": "#ff9800",
+    "Cars.com":   "#e91e63",
 }

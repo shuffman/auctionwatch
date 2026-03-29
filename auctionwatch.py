@@ -36,7 +36,8 @@ from store import (
 )
 from scrapers import (
     HAS_RICH, _console, _log,
-    scrape_carsandbids, scrape_bat, scrape_hagerty, scrape_pcarmarket, scrape_craigslist,
+    scrape_carsandbids, scrape_bat, scrape_hagerty, scrape_pcarmarket,
+    scrape_craigslist, scrape_cars_com,
 )
 
 
@@ -48,6 +49,7 @@ ALL_SITES = {
     "hagerty": ("Hagerty",        "blue",    scrape_hagerty),
     "pcar":    ("PCar Market",    "magenta", scrape_pcarmarket),
     "cl":      ("Craigslist",     "orange1", scrape_craigslist),
+    "carscom": ("Cars.com",       "yellow",  scrape_cars_com),
 }
 
 

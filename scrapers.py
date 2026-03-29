@@ -384,6 +384,70 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
     return listings
 
 
+_CARS_COM_JS = """() => {
+    const results = [];
+    document.querySelectorAll('fuse-card[id^="vehicle-card-"]').forEach(card => {
+        const link    = card.querySelector('a[href*="/vehicledetail/"]');
+        if(!link) return;
+        const title   = card.querySelector('h2')?.textContent?.trim() || '';
+        if(!title) return;
+        // spark-body-larger is the listed price; avoid monthly-payment elements
+        const price   = card.querySelector('span.spark-body-larger, p.spark-body-larger')
+                            ?.textContent?.trim() || '';
+        const mileage = card.querySelector('.datum-icon.mileage')?.textContent?.trim() || '';
+        // .datum-icon without sub-class is the dealer location; .datum-icon.mileage is mileage
+        const location= card.querySelector('.datum-icon:not(.mileage):not(.price-drop):not(.review-star)')
+                            ?.textContent?.trim() || '';
+        const img     = card.querySelector('img');
+        results.push({
+            url:      link.href,
+            title,
+            price,
+            mileage,
+            location,
+            imageUrl: img?.src || '',
+        });
+    });
+    return results;
+}"""
+
+
+async def scrape_cars_com(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "Cars.com"
+    listings = []
+    # Use maximum_distance=all for nationwide results; stock_type=all for new+used
+    url = (
+        f"https://www.cars.com/shopping/results/"
+        f"?keyword={quote_plus(query)}&stock_type=all&maximum_distance=all"
+    )
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_selector('fuse-card[id^="vehicle-card-"]', timeout=15000)
+        if debug:
+            _save_debug(await page.content(), "cars_com")
+        items = await page.evaluate(_CARS_COM_JS) or []
+        for item in items:
+            title = item.get("title", "").strip()
+            url   = item.get("url", "")
+            if not title or not url:
+                continue
+            listings.append(Listing(
+                title=title,
+                url=url,
+                source=source,
+                price=item.get("price", ""),
+                mileage=item.get("mileage", ""),
+                location=item.get("location", ""),
+                time_left="",
+                image_url=item.get("imageUrl", ""),
+            ))
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+    return listings
+
+
 CL_METROS = [
     ("Seattle",        "seattle"),
     ("Portland",       "portland"),

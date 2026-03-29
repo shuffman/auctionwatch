@@ -167,7 +167,8 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .pill[data-site="bat"].on  { color: #4caf50; border-color: rgba(76,175,80,0.5);  background: rgba(76,175,80,0.07); }
     .pill[data-site="hagerty"].on { color: #2196f3; border-color: rgba(33,150,243,0.5); background: rgba(33,150,243,0.07); }
     .pill[data-site="pcar"].on { color: #9c27b0; border-color: rgba(156,39,176,0.5); background: rgba(156,39,176,0.07); }
-    .pill[data-site="cl"].on   { color: #ff9800; border-color: rgba(255,152,0,0.5);  background: rgba(255,152,0,0.07); }
+    .pill[data-site="cl"].on      { color: #ff9800; border-color: rgba(255,152,0,0.5);   background: rgba(255,152,0,0.07); }
+    .pill[data-site="carscom"].on { color: #e91e63; border-color: rgba(233,30,99,0.5);  background: rgba(233,30,99,0.07); }
     .pill[data-filter="cars"].on    { color: var(--accent); border-color: rgba(0,188,212,0.45); background: rgba(0,188,212,0.07); }
     .pill[data-filter="active"].on  { color: var(--green);  border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
     .pill[data-filter="starred"].on { color: var(--yellow); border-color: rgba(230,200,74,0.45); background: rgba(230,200,74,0.07); }
@@ -297,6 +298,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
       <div class="pill on" data-site="hagerty" data-label="Hagerty">Hagerty</div>
       <div class="pill on" data-site="pcar"    data-label="PCar">PCar</div>
       <div class="pill on" data-site="cl"      data-label="CL">CL</div>
+      <div class="pill on" data-site="carscom" data-label="Cars.com">Cars.com</div>
     </div>
   </form>
   {{auth_link}}
@@ -335,8 +337,8 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <div class="grid" id="grid"></div>
 
 <script>
-const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0','Craigslist':'#ff9800'};
-const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar', cl:'CL'};
+const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0','Craigslist':'#ff9800','Cars.com':'#e91e63'};
+const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar', cl:'CL', carscom:'Cars.com'};
 let st = { bysite:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set(), tagState:new Map() };
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
@@ -446,9 +448,9 @@ function allListings(){
   const activeOnly  = isActiveOnly();
   const starredOnly = isStarredOnly();
   const ignoredOnly = isIgnoredOnly();
-  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Craigslist':'cl'};
+  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Craigslist':'cl','Cars.com':'carscom'};
   const onSites = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
-  let all = ['cab','bat','hagerty','pcar','cl'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
+  let all = ['cab','bat','hagerty','pcar','cl','carscom'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
   if(onSites.size > 0) all = all.filter(l => onSites.has(siteKey[l.source]||''));
   if(carsOnly)    all = all.filter(l => YEAR_RE.test(l.title));
   if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; if(!t) return true; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
@@ -531,7 +533,7 @@ function stateToUrl() {
   if(q) p.set('q', q);
   // Sites: only encode when not all selected (the default)
   const on = [...document.querySelectorAll('#spills .pill.on')].map(pill=>pill.dataset.site);
-  if(on.length < 5) p.set('s', on.join(','));
+  if(on.length < 6) p.set('s', on.join(','));
   // Filter pills: only encode non-defaults (active defaults ON, others OFF)
   if(!document.querySelector('[data-filter="cars"].on'))     p.set('cars',     '0');
   if(!document.querySelector('[data-filter="active"].on'))   p.set('active',   '0');
@@ -609,7 +611,7 @@ function setSitePill(site, cls, text){
 }
 
 function updateSiteCounts(visibleListings){
-  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Craigslist':'cl'};
+  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Craigslist':'cl','Cars.com':'carscom'};
   const counts = {};
   for(const l of visibleListings){ const k=siteKey[l.source]; if(k) counts[k]=(counts[k]||0)+1; }
   const ss = document.getElementById('site-status');
@@ -840,7 +842,7 @@ def serve_web(initial_query: str = "", port: int = 5173):
         def _run():
             async def _scrape():
                 active = {k: v for k, v in ALL_SITES.items() if k in sites}
-                auction_sites = {k: v for k, v in active.items() if k != "cl"}
+                auction_sites = {k: v for k, v in active.items() if k not in ("cl",)}
                 cl_sites      = {k: v for k, v in active.items() if k == "cl"}
 
                 UA = (
