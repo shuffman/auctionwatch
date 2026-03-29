@@ -479,9 +479,23 @@ async def scrape_cars_com(page: Page, query: str, debug: bool = False) -> list[L
 
 
 CL_METROS = [
+    # Pacific Northwest — Washington
     ("Seattle",        "seattle"),
+    ("Spokane",        "spokane"),
+    ("Bellingham",     "bellingham"),
+    ("Olympia",        "olympia"),
+    ("Yakima",         "yakima"),
+    ("Tri-Cities",     "tricities"),
+    ("Wenatchee",      "wenatchee"),
+    # Pacific Northwest — Oregon
     ("Portland",       "portland"),
+    ("Eugene",         "eugene"),
+    ("Salem",          "salem"),
+    ("Bend",           "bend"),
+    ("Medford",        "medford"),
+    # Pacific Northwest — Idaho
     ("Boise",          "boise"),
+    # Southwest
     ("Los Angeles",    "losangeles"),
     ("San Francisco",  "sfbay"),
     ("Las Vegas",      "lasvegas"),
