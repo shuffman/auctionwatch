@@ -402,11 +402,17 @@ function renderTagBar(visibleListings) {
   for(const l of nonCL) {
     for(const t of tokenizeTitle(l.title)) counts.set(t, (counts.get(t)||0) + 1);
   }
-  const tags = [...counts.entries()]
-    .filter(([,n]) => n >= 2 && n < nonCL.length)
-    .sort((a,b) => a[0].localeCompare(b[0]))
-    .slice(0, 60)
-    .map(([t]) => t);
+  // Always include active tag-state tags even if they fail the count filter
+  // (e.g. a required tag appears in 100% of visible listings → n === nonCL.length).
+  const activeTags = new Set(st.tagState.keys());
+  const tags = [...new Set([
+    ...[...counts.entries()]
+      .filter(([t,n]) => (n >= 2 && n < nonCL.length) || activeTags.has(t))
+      .sort((a,b) => a[0].localeCompare(b[0]))
+      .slice(0, 60)
+      .map(([t]) => t),
+    ...[...activeTags].filter(t => !counts.has(t)),
+  ])];
   if(!tags.length) { bar.style.display='none'; return; }
   bar.style.display = 'flex';
   bar.innerHTML = tags.map(t => {
