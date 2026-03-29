@@ -430,7 +430,7 @@ async def scrape_cars_com(page: Page, query: str, debug: bool = False) -> list[L
     seen_urls: set[str] = set()
     base_url = (
         f"https://www.cars.com/shopping/results/"
-        f"?keyword={quote_plus(query)}&stock_type=all&maximum_distance=all"
+        f"?keyword={quote_plus(query)}&stock_type=all&maximum_distance=all&sort=list_price_asc"
     )
     try:
         for page_num in range(1, 11):  # cap at 10 pages (~200 results)
