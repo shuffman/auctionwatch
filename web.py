@@ -115,7 +115,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
       background: var(--bg2); border-bottom: 1px solid #1e1e1e;
       padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 0.75rem;
     }
-    .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; display: flex; align-items: baseline; gap: 0.4rem; }
+    .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; display: flex; align-items: baseline; gap: 0.4rem; text-decoration: none; }
     .version { font-size: 0.65rem; font-weight: 400; color: #444; font-family: monospace; }
     #sf { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-width: 0; }
     .sf-row { display: flex; align-items: center; gap: 0.5rem; }
@@ -282,7 +282,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <body>
 
 <header>
-  <div class="brand">AuctionWatch<span class="version">{{version}}</span></div>
+  <a href="/" class="brand">AuctionWatch<span class="version">{{version}}</span></a>
   <form id="sf">
     <div class="sf-row">
       <div id="search-wrap">
