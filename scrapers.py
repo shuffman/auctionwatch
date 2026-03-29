@@ -267,9 +267,11 @@ async def scrape_carsandbids(page: Page, query: str, debug: bool = False) -> lis
     listings = []
 
     try:
+        _log(f"[{source}] Fetching {url}")
         # Use domcontentloaded — C&B is a React SPA that never reaches networkidle
         await page.goto(url, wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_selector('a[href*="/auctions/"]', timeout=20000)
+        _log(f"[{source}] Page loaded, extracting listings")
 
         if debug:
             _save_debug(await page.content(), "carsandbids")
@@ -298,11 +300,14 @@ async def scrape_carsandbids(page: Page, query: str, debug: bool = False) -> lis
                     price=item.get("price", ""), time_left=time_left,
                     image_url=item.get("imageUrl", ""),
                 ))
+        _log(f"[{source}] Done — {len(listings)} listings")
 
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out", "warning")
+        raise
     except Exception as e:
         _log(f"[{source}] Error: {e}", "error")
+        raise
 
     return listings
 
@@ -314,8 +319,10 @@ async def scrape_bat(page: Page, query: str, debug: bool = False) -> list[Listin
     listings = []
 
     try:
+        _log(f"[{source}] Fetching {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_selector('a[href*="/listing/"]', timeout=20000)
+        _log(f"[{source}] Page loaded, extracting listings")
 
         if debug:
             _save_debug(await page.content(), "bat")
@@ -331,11 +338,14 @@ async def scrape_bat(page: Page, query: str, debug: bool = False) -> list[Listin
                     location=item.get("location", ""), image_url=item.get("imageUrl", ""),
 
                 ))
+        _log(f"[{source}] Done — {len(listings)} listings")
 
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out", "warning")
+        raise
     except Exception as e:
         _log(f"[{source}] Error: {e}", "error")
+        raise
 
     return listings
 
@@ -345,13 +355,11 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
     base = "https://www.hagerty.com"
     listings = []
 
+    hagerty_url = f"{base}/marketplace/search?searchQuery={quote_plus(query)}&type=classifieds"
     try:
+        _log(f"[{source}] Fetching {hagerty_url}")
         # Navigate directly to the search URL (discovered via network inspection)
-        await page.goto(
-            f"{base}/marketplace/search?searchQuery={quote_plus(query)}&type=classifieds",
-            wait_until="domcontentloaded",
-            timeout=30000,
-        )
+        await page.goto(hagerty_url, wait_until="domcontentloaded", timeout=30000)
 
         if debug:
             _save_debug(await page.content(), "hagerty")
@@ -360,6 +368,7 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
             'a[href*="/marketplace/auction/"]',
             timeout=20000,
         )
+        _log(f"[{source}] Page loaded, extracting listings")
 
         await _scroll_to_bottom(page)
         for item in (await _eval_listings(page, 'a[href*="/marketplace/auction/"]')):
@@ -375,11 +384,14 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
                 price=item.get("price", ""), time_left=item.get("timeLeft", ""),
                 location=item.get("location", ""), image_url=item.get("imageUrl", ""),
             ))
+        _log(f"[{source}] Done — {len(listings)} listings")
 
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out", "warning")
+        raise
     except Exception as e:
         _log(f"[{source}] Error: {e}", "error")
+        raise
 
     return listings
 
@@ -421,19 +433,21 @@ async def scrape_cars_com(page: Page, query: str, debug: bool = False) -> list[L
         f"?keyword={quote_plus(query)}&stock_type=all&maximum_distance=all"
     )
     try:
+        _log(f"[{source}] Fetching {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await page.wait_for_selector('fuse-card[id^="vehicle-card-"]', timeout=15000)
+        _log(f"[{source}] Page loaded, extracting listings")
         if debug:
             _save_debug(await page.content(), "cars_com")
         items = await page.evaluate(_CARS_COM_JS) or []
         for item in items:
             title = item.get("title", "").strip()
-            url   = item.get("url", "")
-            if not title or not url:
+            item_url = item.get("url", "")
+            if not title or not item_url:
                 continue
             listings.append(Listing(
                 title=title,
-                url=url,
+                url=item_url,
                 source=source,
                 price=item.get("price", ""),
                 mileage=item.get("mileage", ""),
@@ -441,10 +455,13 @@ async def scrape_cars_com(page: Page, query: str, debug: bool = False) -> list[L
                 time_left="",
                 image_url=item.get("imageUrl", ""),
             ))
+        _log(f"[{source}] Done — {len(listings)} listings")
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out", "warning")
+        raise
     except Exception as e:
         _log(f"[{source}] Error: {e}", "error")
+        raise
     return listings
 
 
@@ -605,9 +622,12 @@ async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list
                 image_url=item.get("featured_image_url", ""),
             ))
 
+    pcar_url = f"{base}/auctions"
     try:
-        await page.goto(f"{base}/auctions", wait_until="domcontentloaded", timeout=25000)
+        _log(f"[{source}] Fetching {pcar_url}")
+        await page.goto(pcar_url, wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_selector('#__PRELOADED_AUCTIONS_LIST__', state="attached", timeout=15000)
+        _log(f"[{source}] Page loaded, extracting listings")
 
         if debug:
             _save_debug(await page.content(), "pcarmarket")
@@ -648,9 +668,13 @@ async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list
                 break
             _ingest(api_data.get("results", []))
 
+        _log(f"[{source}] Done — {len(listings)} listings")
+
     except PlaywrightTimeout:
         _log(f"[{source}] Timed out waiting for listings", "warning")
+        raise
     except Exception as e:
         _log(f"[{source}] Error: {e}", "error")
+        raise
 
     return listings
