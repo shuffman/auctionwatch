@@ -168,6 +168,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .pill[data-site="pcar"].on { color: #9c27b0; border-color: rgba(156,39,176,0.5); background: rgba(156,39,176,0.07); }
     .pill[data-site="cl"].on   { color: #ff9800; border-color: rgba(255,152,0,0.5);  background: rgba(255,152,0,0.07); }
     .pill[data-site].prohibit { color: var(--red); border-color: rgba(255,82,82,0.4); background: rgba(255,82,82,0.06); }
+    .pill[data-filter="cars"].on    { color: var(--accent); border-color: rgba(0,188,212,0.45); background: rgba(0,188,212,0.07); }
     .pill[data-filter="active"].on  { color: var(--green);  border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
     .pill[data-filter="starred"].on { color: var(--yellow); border-color: rgba(230,200,74,0.45); background: rgba(230,200,74,0.07); }
     .pill[data-filter="ignored"].on { color: var(--red);    border-color: rgba(255,82,82,0.45);  background: rgba(255,82,82,0.07); }
@@ -305,6 +306,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
   <div class="fsep"></div>
   <div class="fg">
     <div class="pills">
+      <div class="pill on" data-filter="cars">Cars only</div>
       <div class="pill on" data-filter="active">Active only</div>
       <div class="pill"    data-filter="starred">★ Starred</div>
       <div class="pill"    data-filter="ignored">✕ Ignored</div>
@@ -357,9 +359,12 @@ function tlMinutes(tl){
   return m||Infinity;
 }
 
+function isCarsOnly()    { return !!document.querySelector('[data-filter="cars"].on');    }
 function isActiveOnly()  { return !!document.querySelector('[data-filter="active"].on');  }
 function isStarredOnly() { return !!document.querySelector('[data-filter="starred"].on'); }
 function isIgnoredOnly() { return !!document.querySelector('[data-filter="ignored"].on'); }
+
+const YEAR_RE = /\b(19[5-9]\d|20[0-2]\d)\b/;
 
 function extractYear(title) {
   const m = title.match(/\b(19[0-9]{2}|20[0-2][0-9])\b/);
@@ -438,6 +443,7 @@ document.getElementById('tag-bar').addEventListener('click', e => {
 });
 
 function allListings(){
+  const carsOnly    = isCarsOnly();
   const activeOnly  = isActiveOnly();
   const starredOnly = isStarredOnly();
   const ignoredOnly = isIgnoredOnly();
@@ -451,6 +457,7 @@ function allListings(){
     if(reqSites.size > 0 && !reqSites.has(k)) return false;
     return true;
   });
+  if(carsOnly)    all = all.filter(l => YEAR_RE.test(l.title));
   if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; if(!t) return true; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
   if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
   else            all = all.filter(l => !st.ignored.has(l.short_id));
@@ -541,6 +548,7 @@ function stateToUrl() {
     if(proh.length) p.set('xs', proh.join(','));
   }
   // Filter pills: only encode non-defaults (active defaults ON, others OFF)
+  if(!document.querySelector('[data-filter="cars"].on'))     p.set('cars',     '0');
   if(!document.querySelector('[data-filter="active"].on'))   p.set('active',   '0');
   if(document.querySelector('[data-filter="starred"].on'))   p.set('starred',  '1');
   if(document.querySelector('[data-filter="ignored"].on'))   p.set('ignored',  '1');
@@ -575,6 +583,7 @@ function urlToState() {
     });
   }
   // Filter pills
+  if(p.get('cars')    === '0') document.querySelector('[data-filter="cars"]')?.classList.remove('on');
   if(p.get('active')  === '0') document.querySelector('[data-filter="active"]')?.classList.remove('on');
   if(p.get('starred') === '1') document.querySelector('[data-filter="starred"]')?.classList.add('on');
   if(p.get('ignored') === '1') document.querySelector('[data-filter="ignored"]')?.classList.add('on');
