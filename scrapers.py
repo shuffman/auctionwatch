@@ -320,20 +320,32 @@ async def scrape_bat(page: Page, query: str, debug: bool = False) -> list[Listin
 
     try:
         _log(f"[{source}] Fetching {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        await page.goto(url, wait_until="load", timeout=30000)
         await page.wait_for_selector('a[href*="/listing/"]', timeout=20000)
+        # Give Knockout.js / lazy-load scripts time to initialize before scrolling
+        await page.wait_for_timeout(2000)
         _log(f"[{source}] Page loaded, extracting listings")
+
+        await _scroll_to_bottom(page)
+        # After scrolling, wait for any AJAX-loaded completed listings to settle
+        await page.wait_for_load_state("networkidle", timeout=10000)
 
         if debug:
             _save_debug(await page.content(), "bat")
-
-        await _scroll_to_bottom(page)
         for item in (await _eval_listings(page, 'a[href*="/listing/"]')):
             if item.get("title") and item.get("url"):
+                title = item["title"]
+                url   = item["url"]
+                # If the extracted title is missing a year, pull it from the URL slug
+                # (BaT slugs: /listing/2003-saab-9-3-5/ → prepend "2003")
+                if not re.search(r'\b(?:19[5-9]\d|20[0-2]\d)\b', title):
+                    m = re.search(r'/listing/(\d{4})-', url)
+                    if m:
+                        title = m.group(1) + ' ' + title
                 # BaT is auctions-only: no countdown = auction ended
                 time_left = item.get("timeLeft", "") or "Ended"
                 listings.append(Listing(
-                    title=item["title"], url=item["url"], source=source,
+                    title=title, url=url, source=source,
                     price=item.get("price", ""), time_left=time_left,
                     location=item.get("location", ""), image_url=item.get("imageUrl", ""),
 
@@ -574,6 +586,9 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list
                     continue
                 title_key = title.lower()
                 if title_key in seen_titles:
+                    continue
+                item_url = item.get("url", "")
+                if "vancouver.craigslist.org" in item_url:
                     continue
                 seen_pids.add(dedup_key)
                 seen_titles.add(title_key)
