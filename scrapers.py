@@ -86,6 +86,24 @@ def _abs_url(href: str, base: str) -> str:
     return base.rstrip("/") + "/" + href.lstrip("/")
 
 
+# Porsche model keyword → URL key for finder.porsche.com
+_PF_MODELS: list[tuple[str, str]] = [
+    ("cayenne", "cayenne"),
+    ("macan", "macan"),
+    ("taycan", "taycan"),
+    ("panamera", "panamera"),
+    ("boxster", "718"),
+    ("cayman", "718"),
+    ("spyder", "718"),
+    ("718", "718"),
+    ("911", "911"),
+    ("carrera", "911"),
+    ("targa", "911"),
+    ("gt3", "911"),
+    ("gt2", "911"),
+]
+
+
 # ─── Scrapers ─────────────────────────────────────────────────────────────────
 
 # JavaScript run inside the browser to extract listing data by walking up from
@@ -719,4 +737,100 @@ async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list
         _log(f"[{source}] Error: {e}", "error")
         raise
 
+    return listings
+
+
+async def scrape_pf(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "Porsche Finder"
+    base = "https://finder.porsche.com/us/en-US"
+    listings: list[Listing] = []
+    seen_urls: set[str] = set()
+
+    # Detect Porsche model from query for targeted URL
+    q_lower = query.lower()
+    model_key: str | None = None
+    for keyword, key in _PF_MODELS:
+        if re.search(rf'\b{re.escape(keyword)}\b', q_lower):
+            model_key = key
+            break
+
+    # Words to filter client-side (everything except "porsche" and short words)
+    filter_words = [w for w in re.split(r'\W+', q_lower)
+                    if len(w) > 2 and w not in ('porsche', 'the', 'and', 'for')]
+
+    search_base = f"{base}/search/{model_key}?model={model_key}" if model_key else f"{base}/search"
+
+    try:
+        for page_num in range(1, 6):  # max 5 pages = 75 results
+            url = f"{search_base}&page={page_num}" if page_num > 1 else search_base
+            _log(f"[{source}] Fetching page {page_num}: {url}")
+            await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            await page.wait_for_timeout(1500)
+
+            if debug and page_num == 1:
+                _save_debug(await page.content(), "pf")
+
+            items = await page.evaluate("""() => {
+                for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+                    try {
+                        const d = JSON.parse(s.textContent);
+                        if (d['@type'] === 'ItemList') return d.itemListElement || [];
+                    } catch(e) {}
+                }
+                return [];
+            }""")
+
+            if not items:
+                break
+
+            for item in items:
+                offers   = item.get("offers") or {}
+                raw_url  = offers.get("url", "")
+                clean_url = raw_url.split("?")[0]  # strip position/model params
+                if not clean_url or clean_url in seen_urls:
+                    continue
+                seen_urls.add(clean_url)
+
+                year   = (item.get("modelDate") or item.get("vehicleModelDate") or "")[:4]
+                config = item.get("vehicleConfiguration") or item.get("name") or ""
+                title  = f"{year} Porsche {config}".strip()
+
+                # Client-side query filter
+                if filter_words:
+                    tl = title.lower()
+                    if not all(w in tl for w in filter_words):
+                        continue
+
+                price_val = offers.get("price")
+                price     = f"${price_val:,.0f}" if price_val else ""
+
+                miles_val = (item.get("mileageFromOdometer") or {}).get("value")
+                mileage   = f"{int(miles_val):,} mi" if miles_val and int(miles_val) > 0 else ""
+
+                address  = (offers.get("seller") or {}).get("address") or {}
+                location = address.get("addressLocality", "")
+
+                image = item.get("image") or ""
+                if isinstance(image, list):
+                    image = image[0] if image else ""
+
+                listings.append(Listing(
+                    title=title, url=clean_url, source=source,
+                    price=price, mileage=mileage, location=location,
+                    image_url=image,
+                ))
+
+            _log(f"[{source}] Page {page_num}: {len(items)} items")
+            if len(items) < 15:
+                break  # last page
+            await page.wait_for_timeout(400)
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
+    _log(f"[{source}] Done — {len(listings)} listings")
     return listings

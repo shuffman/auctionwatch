@@ -41,6 +41,7 @@ SOURCE_COLORS_RICH = {
     "Hagerty": "blue",
     "PCar Market": "magenta",
     "Craigslist": "orange1",
+    "Porsche Finder": "red",
 }
 
 SOURCE_COLORS_HTML = {
@@ -50,4 +51,5 @@ SOURCE_COLORS_HTML = {
     "PCar Market": "#9c27b0",
     "Craigslist": "#ff9800",
     "Cars.com":   "#e91e63",
+    "Porsche Finder": "#d5001c",
 }

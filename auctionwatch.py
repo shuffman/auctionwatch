@@ -37,7 +37,7 @@ from store import (
 from scrapers import (
     HAS_RICH, _console, _log,
     scrape_carsandbids, scrape_bat, scrape_hagerty, scrape_pcarmarket,
-    scrape_craigslist, scrape_cars_com,
+    scrape_craigslist, scrape_cars_com, scrape_pf,
 )
 
 
@@ -48,6 +48,7 @@ ALL_SITES = {
     "bat":     ("Bring a Trailer","green",   scrape_bat),
     "hagerty": ("Hagerty",        "blue",    scrape_hagerty),
     "pcar":    ("PCar Market",    "magenta", scrape_pcarmarket),
+    "pf":      ("Porsche Finder", "red",     scrape_pf),
     "cl":      ("Craigslist",     "orange1", scrape_craigslist),
     "carscom": ("Cars.com",       "yellow",  scrape_cars_com),
 }
@@ -587,6 +588,8 @@ examples:
                             help="Search Hagerty Marketplace")
     site_group.add_argument("--pcar",    dest="sites", action="append_const", const="pcar",
                             help="Search PCar Market")
+    site_group.add_argument("--pf",      dest="sites", action="append_const", const="pf",
+                            help="Search Porsche Finder (finder.porsche.com)")
     site_group.add_argument("--cl",      dest="sites", action="append_const", const="cl",
                             help="Search Craigslist (west coast metros)")
 
