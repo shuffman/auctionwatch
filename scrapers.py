@@ -1176,6 +1176,8 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False) -> list[L
     listings: list[Listing] = []
     seen_ids: set[str] = set()
 
+    query_words = [w.lower() for w in query.split() if len(w) > 1]
+
     def _ingest(results: list[dict]):
         for item in results:
             item_id = str(item.get("id", ""))
@@ -1184,6 +1186,8 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False) -> list[L
             seen_ids.add(item_id)
             title = item.get("title", "") or ""
             if not title:
+                continue
+            if not all(w in title.lower() for w in query_words):
                 continue
             url = item.get("url", "") or ""
             if not url:
@@ -1295,6 +1299,8 @@ async def scrape_classiccars(page: Page, query: str, debug: bool = False) -> lis
     listings: list[Listing] = []
     seen_skus: set[str] = set()
 
+    query_words = [w.lower() for w in query.split() if len(w) > 1]
+
     def _ingest_jld(jlds: list[dict]):
         for d in jlds:
             if (d.get("@type") or "").lower() != "car":
@@ -1305,6 +1311,8 @@ async def scrape_classiccars(page: Page, query: str, debug: bool = False) -> lis
             seen_skus.add(sku)
             name = d.get("name", "")
             if not name:
+                continue
+            if not all(w in name.lower() for w in query_words):
                 continue
             offers = d.get("offers") or {}
             raw_url = offers.get("url", "")
@@ -1437,6 +1445,8 @@ async def scrape_dupont(page: Page, query: str, debug: bool = False) -> list[Lis
     listings: list[Listing] = []
     seen_ids: set[str] = set()
 
+    query_words = [w.lower() for w in query.split() if len(w) > 1]
+
     def _ingest(autos: list[dict]):
         for car in autos:
             car_id = str(car.get("id", ""))
@@ -1449,6 +1459,8 @@ async def scrape_dupont(page: Page, query: str, debug: bool = False) -> list[Lis
             trim  = car.get("trim") or ""
             title = " ".join(str(p) for p in [year, brand, model, trim] if p).strip()
             if not title:
+                continue
+            if not all(w in title.lower() for w in query_words):
                 continue
             price_val = car.get("price")
             price = f"${price_val:,.0f}" if price_val else ""
