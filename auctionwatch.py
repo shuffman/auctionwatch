@@ -38,6 +38,7 @@ from scrapers import (
     HAS_RICH, _console, _log,
     scrape_carsandbids, scrape_bat, scrape_hagerty, scrape_pcarmarket,
     scrape_craigslist, scrape_cars_com, scrape_pf, scrape_carmax, scrape_carvana,
+    scrape_ebay, scrape_hemmings, scrape_classiccars, scrape_collecting, scrape_dupont,
 )
 
 
@@ -51,8 +52,13 @@ ALL_SITES = {
     "pf":      ("Porsche Finder", "red",     scrape_pf),
     "cl":      ("Craigslist",     "orange1", scrape_craigslist),
     "carscom": ("Cars.com",       "yellow",  scrape_cars_com),
-    "carmax":  ("CarMax",         "red",     scrape_carmax),
-    "carvana": ("Carvana",        "cyan",    scrape_carvana),
+    "carmax":    ("CarMax",         "red",     scrape_carmax),
+    "carvana":   ("Carvana",        "cyan",    scrape_carvana),
+    "ebay":      ("eBay Motors",    "red",     scrape_ebay),
+    "hemmings":  ("Hemmings",       "red",     scrape_hemmings),
+    "classiccars":("ClassicCars",   "blue",    scrape_classiccars),
+    "collecting":("Collecting Cars","white",   scrape_collecting),
+    "dupont":    ("duPont Registry","yellow",  scrape_dupont),
 }
 
 
@@ -594,10 +600,20 @@ examples:
                             help="Search Porsche Finder (finder.porsche.com)")
     site_group.add_argument("--cl",      dest="sites", action="append_const", const="cl",
                             help="Search Craigslist (west coast metros)")
-    site_group.add_argument("--carmax",  dest="sites", action="append_const", const="carmax",
+    site_group.add_argument("--carmax",      dest="sites", action="append_const", const="carmax",
                             help="Search CarMax")
-    site_group.add_argument("--carvana", dest="sites", action="append_const", const="carvana",
+    site_group.add_argument("--carvana",     dest="sites", action="append_const", const="carvana",
                             help="Search Carvana")
+    site_group.add_argument("--ebay",        dest="sites", action="append_const", const="ebay",
+                            help="Search eBay Motors")
+    site_group.add_argument("--hemmings",    dest="sites", action="append_const", const="hemmings",
+                            help="Search Hemmings")
+    site_group.add_argument("--classiccars", dest="sites", action="append_const", const="classiccars",
+                            help="Search ClassicCars.com")
+    site_group.add_argument("--collecting",  dest="sites", action="append_const", const="collecting",
+                            help="Search Collecting Cars")
+    site_group.add_argument("--dupont",      dest="sites", action="append_const", const="dupont",
+                            help="Search duPont Registry")
 
     args = parser.parse_args()
 

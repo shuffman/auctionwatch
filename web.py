@@ -171,8 +171,13 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .pill[data-site="cl"].on      { color: #ff9800; border-color: rgba(255,152,0,0.5);   background: rgba(255,152,0,0.07); }
     .pill[data-site="carscom"].on { color: #e91e63; border-color: rgba(233,30,99,0.5);  background: rgba(233,30,99,0.07); }
     .pill[data-site="pf"].on      { color: #d5001c; border-color: rgba(213,0,28,0.5);   background: rgba(213,0,28,0.07); }
-    .pill[data-site="carmax"].on  { color: #c9201f; border-color: rgba(201,32,31,0.5); background: rgba(201,32,31,0.07); }
-    .pill[data-site="carvana"].on { color: #00a78e; border-color: rgba(0,167,142,0.5); background: rgba(0,167,142,0.07); }
+    .pill[data-site="carmax"].on      { color: #c9201f; border-color: rgba(201,32,31,0.5);   background: rgba(201,32,31,0.07); }
+    .pill[data-site="carvana"].on     { color: #00a78e; border-color: rgba(0,167,142,0.5);   background: rgba(0,167,142,0.07); }
+    .pill[data-site="ebay"].on        { color: #e43137; border-color: rgba(228,49,55,0.5);   background: rgba(228,49,55,0.07); }
+    .pill[data-site="hemmings"].on    { color: #b22222; border-color: rgba(178,34,34,0.5);   background: rgba(178,34,34,0.07); }
+    .pill[data-site="classiccars"].on { color: #1e5c9b; border-color: rgba(30,92,155,0.5);   background: rgba(30,92,155,0.07); }
+    .pill[data-site="collecting"].on  { color: #888;    border-color: rgba(136,136,136,0.5); background: rgba(136,136,136,0.07); }
+    .pill[data-site="dupont"].on      { color: #a08040; border-color: rgba(160,128,64,0.5);  background: rgba(160,128,64,0.07); }
     .pill[data-filter="cars"].on    { color: var(--accent); border-color: rgba(0,188,212,0.45); background: rgba(0,188,212,0.07); }
     .pill[data-filter="active"].on  { color: var(--green);  border-color: rgba(0,230,118,0.45); background: rgba(0,230,118,0.07); }
     .pill[data-filter="starred"].on { color: var(--yellow); border-color: rgba(230,200,74,0.45); background: rgba(230,200,74,0.07); }
@@ -322,8 +327,13 @@ _WEB_HTML = r"""<!DOCTYPE html>
       <div class="pill on" data-site="pf"      data-label="PF">Porsche Finder</div>
       <div class="pill on" data-site="cl"      data-label="CL">CL</div>
       <div class="pill on" data-site="carscom" data-label="Cars.com">Cars.com</div>
-      <div class="pill on" data-site="carmax"  data-label="CarMax">CarMax</div>
-      <div class="pill on" data-site="carvana" data-label="Carvana">Carvana</div>
+      <div class="pill on" data-site="carmax"      data-label="CarMax">CarMax</div>
+      <div class="pill on" data-site="carvana"     data-label="Carvana">Carvana</div>
+      <div class="pill on" data-site="ebay"        data-label="eBay">eBay Motors</div>
+      <div class="pill on" data-site="hemmings"    data-label="Hemmings">Hemmings</div>
+      <div class="pill on" data-site="classiccars" data-label="ClassicCars">ClassicCars</div>
+      <div class="pill on" data-site="collecting"  data-label="Collecting">Collecting Cars</div>
+      <div class="pill on" data-site="dupont"      data-label="duPont">duPont Registry</div>
     </div>
   </form>
   {{auth_link}}
@@ -373,8 +383,8 @@ _WEB_HTML = r"""<!DOCTYPE html>
 <div class="grid" id="grid"></div>
 
 <script>
-const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0','Craigslist':'#ff9800','Cars.com':'#e91e63','Porsche Finder':'#d5001c','CarMax':'#c9201f','Carvana':'#00a78e'};
-const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar', pf:'PF', cl:'CL', carscom:'Cars.com', carmax:'CarMax', carvana:'Carvana'};
+const SC = {'Cars & Bids':'#00bcd4','Bring a Trailer':'#4caf50','Hagerty':'#2196f3','PCar Market':'#9c27b0','Craigslist':'#ff9800','Cars.com':'#e91e63','Porsche Finder':'#d5001c','CarMax':'#c9201f','Carvana':'#00a78e','eBay Motors':'#e43137','Hemmings':'#b22222','ClassicCars':'#1e5c9b','Collecting Cars':'#222222','duPont Registry':'#a08040'};
+const SN = {cab:'C&B', bat:'BaT', hagerty:'Hagerty', pcar:'PCar', pf:'PF', cl:'CL', carscom:'Cars.com', carmax:'CarMax', carvana:'Carvana', ebay:'eBay', hemmings:'Hemmings', classiccars:'ClassicCars', collecting:'Collecting', dupont:'duPont'};
 let st = { bysite:{}, siteData:{}, serverStart:'', lastQ:'', lastT:'', starred:new Set(), ignored:new Set(), tagState:new Map() };
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
@@ -485,9 +495,9 @@ function allListings(){
   const activeOnly  = isActiveOnly();
   const starredOnly = isStarredOnly();
   const ignoredOnly = isIgnoredOnly();
-  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Porsche Finder':'pf','Craigslist':'cl','Cars.com':'carscom','CarMax':'carmax','Carvana':'carvana'};
+  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Porsche Finder':'pf','Craigslist':'cl','Cars.com':'carscom','CarMax':'carmax','Carvana':'carvana','eBay Motors':'ebay','Hemmings':'hemmings','ClassicCars':'classiccars','Collecting Cars':'collecting','duPont Registry':'dupont'};
   const onSites = new Set([...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site));
-  let all = ['cab','bat','hagerty','pcar','pf','cl','carscom','carmax','carvana'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
+  let all = ['cab','bat','hagerty','pcar','pf','cl','carscom','carmax','carvana','ebay','hemmings','classiccars','collecting','dupont'].filter(k=>st.bysite[k]).flatMap(k=>st.bysite[k]);
   if(onSites.size > 0) all = all.filter(l => onSites.has(siteKey[l.source]||''));
   if(carsOnly)    all = all.filter(l => YEAR_RE.test(l.title));
   if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; if(!t) return true; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
@@ -577,7 +587,8 @@ function stateToUrl() {
   if(q) p.set('q', q);
   // Sites: only encode when not all selected (the default)
   const on = [...document.querySelectorAll('#spills .pill.on')].map(pill=>pill.dataset.site);
-  if(on.length < 6) p.set('s', on.join(','));
+  const allPills = document.querySelectorAll('#spills .pill[data-site]').length;
+  if(on.length < allPills) p.set('s', on.join(','));
   // Filter pills: only encode non-defaults (active defaults ON, others OFF)
   if(!document.querySelector('[data-filter="cars"].on'))     p.set('cars',     '0');
   if(!document.querySelector('[data-filter="active"].on'))   p.set('active',   '0');
@@ -652,7 +663,7 @@ function render(){
 
 function buildSpillTip(site) {
   const d = st.siteData[site];
-  const fullName = {'cab':'Cars & Bids','bat':'Bring a Trailer','hagerty':'Hagerty','pcar':'PCar Market','pf':'Porsche Finder','cl':'Craigslist','carscom':'Cars.com','carmax':'CarMax','carvana':'Carvana'}[site] || site;
+  const fullName = {'cab':'Cars & Bids','bat':'Bring a Trailer','hagerty':'Hagerty','pcar':'PCar Market','pf':'Porsche Finder','cl':'Craigslist','carscom':'Cars.com','carmax':'CarMax','carvana':'Carvana','ebay':'eBay Motors','hemmings':'Hemmings','classiccars':'ClassicCars','collecting':'Collecting Cars','dupont':'duPont Registry'}[site] || site;
   if(!d) return `<b>${fullName}</b><br><span class="tip-label">Loading…</span>`;
   const s = d.stats || {};
   const count = (st.bysite[site]||[]).length;
@@ -688,7 +699,7 @@ function setSitePill(site, cls, text){
 }
 
 function updateSiteCounts(visibleListings){
-  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Porsche Finder':'pf','Craigslist':'cl','Cars.com':'carscom','CarMax':'carmax','Carvana':'carvana'};
+  const siteKey = {'Cars & Bids':'cab','Bring a Trailer':'bat','Hagerty':'hagerty','PCar Market':'pcar','Porsche Finder':'pf','Craigslist':'cl','Cars.com':'carscom','CarMax':'carmax','Carvana':'carvana','eBay Motors':'ebay','Hemmings':'hemmings','ClassicCars':'classiccars','Collecting Cars':'collecting','duPont Registry':'dupont'};
   const counts = {};
   for(const l of visibleListings){ const k=siteKey[l.source]; if(k) counts[k]=(counts[k]||0)+1; }
   const ss = document.getElementById('site-status');
