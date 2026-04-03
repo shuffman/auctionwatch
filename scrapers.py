@@ -1088,6 +1088,8 @@ async def scrape_ebay(page: Page, query: str, debug: bool = False) -> list[Listi
     listings: list[Listing] = []
     seen_urls: set[str] = set()
 
+    query_words = [w.lower() for w in query.split() if len(w) > 1]
+
     def _ingest(items: list[dict]):
         for item in items:
             url = item.get("url", "")
@@ -1096,6 +1098,8 @@ async def scrape_ebay(page: Page, query: str, debug: bool = False) -> list[Listi
             seen_urls.add(url)
             title = item.get("title", "")
             if not title:
+                continue
+            if not all(w in title.lower() for w in query_words):
                 continue
             time_left = item.get("timeLeft", "")
             # "2d 6h left" → "2D 6H"; no time = classified (no time_left)
