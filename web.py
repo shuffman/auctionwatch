@@ -329,7 +329,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
     </div>
     <div class="sf-row">
       <span class="loc-label">Near ZIP</span>
-      <input id="zip" type="text" placeholder="e.g. 98101" maxlength="5" pattern="\\d{5}">
+      <input id="zip" type="text" placeholder="e.g. 98101" maxlength="5">
       <span class="loc-label">within</span>
       <select id="radius">
         <option value="0">any distance</option>
