@@ -387,35 +387,37 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
     base = "https://www.hagerty.com"
     listings = []
 
-    hagerty_url = f"{base}/marketplace/search?searchQuery={quote_plus(query)}&type=classifieds"
+    hagerty_url = f"{base}/marketplace/search?searchQuery={quote_plus(query)}&sortBy=recommended"
     try:
         _log(f"[{source}] Fetching {hagerty_url}")
-        # Navigate directly to the search URL (discovered via network inspection)
         await page.goto(hagerty_url, wait_until="domcontentloaded", timeout=30000)
 
         if debug:
             _save_debug(await page.content(), "hagerty")
 
         await page.wait_for_selector(
-            'a[href*="/marketplace/auction/"]',
+            'a[href*="/marketplace/auction/"], a[href*="/marketplace/listings/"]',
             timeout=20000,
         )
         _log(f"[{source}] Page loaded, extracting listings")
 
         await _scroll_to_bottom(page)
-        for item in (await _eval_listings(page, 'a[href*="/marketplace/auction/"]')):
-            title = item.get("title", "")
-            url = item.get("url", "")
-            if not title or not url:
-                continue
-            # Filter out Hagerty promotional/UI entries
-            if re.search(r'why hagerty|hagerty marketplace\?', title, re.IGNORECASE):
-                continue
-            listings.append(Listing(
-                title=title, url=url, source=source,
-                price=item.get("price", ""), time_left=item.get("timeLeft", ""),
-                location=item.get("location", ""), image_url=item.get("imageUrl", ""),
-            ))
+        seen_urls: set[str] = set()
+        for selector in ('a[href*="/marketplace/auction/"]', 'a[href*="/marketplace/listings/"]'):
+            for item in (await _eval_listings(page, selector)):
+                title = item.get("title", "")
+                url = item.get("url", "")
+                if not title or not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                # Filter out Hagerty promotional/UI entries
+                if re.search(r'why hagerty|hagerty marketplace\?', title, re.IGNORECASE):
+                    continue
+                listings.append(Listing(
+                    title=title, url=url, source=source,
+                    price=item.get("price", ""), time_left=item.get("timeLeft", ""),
+                    location=item.get("location", ""), image_url=item.get("imageUrl", ""),
+                ))
         _log(f"[{source}] Done — {len(listings)} listings")
 
     except PlaywrightTimeout:
