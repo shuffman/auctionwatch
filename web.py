@@ -145,6 +145,14 @@ _WEB_HTML = r"""<!DOCTYPE html>
     }
     #search-btn:hover { background: #26c6da; }
     #search-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    #zip, #radius {
+      background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 6px;
+      padding: 0.35rem 0.55rem; color: var(--text); font-size: 0.8rem; outline: none;
+    }
+    #zip { width: 7rem; }
+    #zip:focus, #radius:focus { border-color: var(--accent); }
+    #radius { color: #888; }
+    .loc-label { font-size: 0.75rem; color: #444; white-space: nowrap; }
 
     /* ── Filter bar ── */
     #filters {
@@ -318,6 +326,20 @@ _WEB_HTML = r"""<!DOCTYPE html>
         <div id="recent-searches"></div>
       </div>
       <button type="submit" id="search-btn">Search</button>
+    </div>
+    <div class="sf-row">
+      <span class="loc-label">Near ZIP</span>
+      <input id="zip" type="text" placeholder="e.g. 98101" maxlength="5" pattern="\\d{5}">
+      <span class="loc-label">within</span>
+      <select id="radius">
+        <option value="0">any distance</option>
+        <option value="25">25 mi</option>
+        <option value="50">50 mi</option>
+        <option value="100">100 mi</option>
+        <option value="150">150 mi</option>
+        <option value="250">250 mi</option>
+        <option value="500">500 mi</option>
+      </select>
     </div>
     <div class="pills" id="spills">
       <div class="pill on" data-site="cab"     data-label="C&amp;B">C&amp;B</div>
@@ -594,6 +616,11 @@ function stateToUrl() {
   if(!document.querySelector('[data-filter="active"].on'))   p.set('active',   '0');
   if(document.querySelector('[data-filter="starred"].on'))   p.set('starred',  '1');
   if(document.querySelector('[data-filter="ignored"].on'))   p.set('ignored',  '1');
+  // Location
+  const zipVal = document.getElementById('zip').value.trim();
+  if(zipVal) p.set('zip', zipVal);
+  const radVal = document.getElementById('radius').value;
+  if(radVal !== '0') p.set('rad', radVal);
   // Ranges
   const rangeMap = {'ylo':'year-lo','yhi':'year-hi','plo':'price-lo','phi':'price-hi'};
   for(const [key,id] of Object.entries(rangeMap)) { const v=document.getElementById(id).value; if(v) p.set(key,v); }
@@ -627,6 +654,9 @@ function urlToState() {
   if(p.get('active')  === '0') document.querySelector('[data-filter="active"]')?.classList.remove('on');
   if(p.get('starred') === '1') document.querySelector('[data-filter="starred"]')?.classList.add('on');
   if(p.get('ignored') === '1') document.querySelector('[data-filter="ignored"]')?.classList.add('on');
+  // Location
+  const zipParam = p.get('zip'); if(zipParam) document.getElementById('zip').value = zipParam;
+  const radParam = p.get('rad'); if(radParam) document.getElementById('radius').value = radParam;
   // Ranges
   const rangeMap = {'ylo':'year-lo','yhi':'year-hi','plo':'price-lo','phi':'price-hi'};
   for(const [key,id] of Object.entries(rangeMap)) { const v=p.get(key); if(v) document.getElementById(id).value=v; }
@@ -735,7 +765,10 @@ function doSearch(e, keepTags=false){
   document.getElementById('tag-bar').style.display='none';
   const activeOnly=!!document.querySelector('[data-filter="active"].on');
   const sp=sites.map(s=>`sites=${encodeURIComponent(s)}`).join('&');
-  const url=`/api/search/stream?q=${encodeURIComponent(q)}&${sp}${activeOnly?'&active=1':''}`;
+  const zip=document.getElementById('zip').value.trim();
+  const rad=document.getElementById('radius').value;
+  const locParams=(zip?`&zip=${encodeURIComponent(zip)}`:'')+(zip&&rad!=='0'?`&radius=${rad}`:'');
+  const url=`/api/search/stream?q=${encodeURIComponent(q)}&${sp}${activeOnly?'&active=1':''}${locParams}`;
   sites.forEach(s=>setSitePill(s,'loading',SN[s]));
   const es=new EventSource(url);
   st.es=es;
@@ -917,9 +950,11 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
 
     @app.route("/api/search/stream")
     def search_stream():
-        q       = freq.args.get("q", "").strip()
-        sites   = freq.args.getlist("sites") or list(ALL_SITES.keys())
+        q        = freq.args.get("q", "").strip()
+        sites    = freq.args.getlist("sites") or list(ALL_SITES.keys())
         act_only = freq.args.get("active") == "1"
+        zip_code = freq.args.get("zip", "").strip()
+        radius   = int(freq.args.get("radius", "0") or "0")
 
         if not q:
             return jsonify({"error": "no query"}), 400
@@ -954,7 +989,7 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
                     async def _one(i, key, name, scraper_fn):
                         t0 = time.time()
                         try:
-                            listings = await scraper_fn(pages[i], q, False)
+                            listings = await scraper_fn(pages[i], q, False, zip_code=zip_code, radius=radius)
                             elapsed = round(time.time() - t0, 1)
                             if act_only:
                                 listings = [l for l in listings if l.is_active is not False]
@@ -983,7 +1018,7 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
                     for key, (name, _, scraper_fn) in cl_sites.items():
                         t0 = time.time()
                         try:
-                            listings = await scraper_fn(page, q, False)
+                            listings = await scraper_fn(page, q, False, zip_code=zip_code, radius=radius)
                             elapsed = round(time.time() - t0, 1)
                             if act_only:
                                 listings = [l for l in listings if l.is_active is not False]

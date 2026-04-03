@@ -280,7 +280,7 @@ async def _scroll_to_bottom(page: Page, pause_ms: int = 800, max_scrolls: int = 
             break
 
 
-async def scrape_carsandbids(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_carsandbids(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Cars & Bids"
     base = "https://carsandbids.com"
     url = f"{base}/search?q={quote_plus(query)}"
@@ -332,7 +332,7 @@ async def scrape_carsandbids(page: Page, query: str, debug: bool = False) -> lis
     return listings
 
 
-async def scrape_bat(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_bat(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Bring a Trailer"
     base = "https://bringatrailer.com"
     url = f"{base}/search/?s={quote_plus(query)}"
@@ -465,7 +465,7 @@ _HAGERTY_JS = f"""() => {{
 }}"""
 
 
-async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_hagerty(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Hagerty"
     base = "https://www.hagerty.com"
     listings = []
@@ -539,13 +539,14 @@ _CARS_COM_JS = """() => {
 }"""
 
 
-async def scrape_cars_com(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_cars_com(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Cars.com"
     listings = []
     seen_urls: set[str] = set()
+    loc = f"&zip={zip_code}&maximum_distance={radius or 'all'}" if zip_code else "&maximum_distance=all"
     base_url = (
         f"https://www.cars.com/shopping/results/"
-        f"?keyword={quote_plus(query)}&stock_type=all&maximum_distance=all&sort=list_price_asc"
+        f"?keyword={quote_plus(query)}&stock_type=all{loc}&sort=list_price_asc"
     )
     try:
         for page_num in range(1, 11):  # cap at 10 pages (~200 results)
@@ -638,7 +639,7 @@ _CL_JS = """() => {
 }"""
 
 
-async def scrape_craigslist(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_craigslist(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Craigslist"
     listings = []
     seen_pids: set[str] = set()
@@ -734,7 +735,7 @@ def _fmt_pcar_time(seconds) -> str:
     return " ".join(parts)
 
 
-async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_pcarmarket(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "PCar Market"
     base = "https://www.pcarmarket.com"
     listings = []
@@ -867,7 +868,7 @@ def _carmax_listing(car: dict, base: str, source: str) -> "Listing | None":
     )
 
 
-async def scrape_carmax(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_carmax(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "CarMax"
     base   = "https://www.carmax.com"
     listings: list[Listing] = []
@@ -889,7 +890,7 @@ async def scrape_carmax(page: Page, query: str, debug: bool = False) -> list[Lis
             if lst and _matches(lst.title):
                 listings.append(lst)
 
-    search_url = f"{base}/cars?search={quote_plus(query)}"
+    search_url = f"{base}/cars?search={quote_plus(query)}" + (f"&zip={zip_code}" if zip_code else "")
     try:
         _log(f"[{source}] Fetching {search_url}")
         await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
@@ -953,7 +954,7 @@ async def scrape_carmax(page: Page, query: str, debug: bool = False) -> list[Lis
     return listings
 
 
-async def scrape_carvana(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_carvana(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Carvana"
     base   = "https://www.carvana.com"
     listings: list[Listing] = []
@@ -1039,7 +1040,7 @@ async def scrape_carvana(page: Page, query: str, debug: bool = False) -> list[Li
     return listings
 
 
-async def scrape_pf(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Porsche Finder"
     base = "https://finder.porsche.com/us/en-US"
     listings: list[Listing] = []
@@ -1165,7 +1166,7 @@ _EBAY_JS = """() => {
 }"""
 
 
-async def scrape_ebay(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_ebay(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source  = "eBay Motors"
     base    = "https://www.ebay.com"
     listings: list[Listing] = []
@@ -1195,10 +1196,11 @@ async def scrape_ebay(page: Page, query: str, debug: bool = False) -> list[Listi
             ))
 
     try:
+        loc_params = (f"&_stpos={zip_code}" + (f"&_sadis={radius}" if radius else "")) if zip_code else ""
         for page_num in range(1, 4):   # cap at 3 pages (~180 results)
             url = (
                 f"{base}/sch/i.html?_nkw={quote_plus(query)}"
-                f"&_sacat=6001&_sop=12&_pgn={page_num}"
+                f"&_sacat=6001&_sop=12&_pgn={page_num}{loc_params}"
             )
             _log(f"[{source}] Fetching page {page_num}: {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -1253,7 +1255,7 @@ def _hemmings_time_left(end_date: str | None) -> str:
         return ""
 
 
-async def scrape_hemmings(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_hemmings(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Hemmings"
     base   = "https://www.hemmings.com"
     listings: list[Listing] = []
@@ -1376,7 +1378,7 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False) -> list[L
 
 # ─── ClassicCars.com ──────────────────────────────────────────────────────────
 
-async def scrape_classiccars(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_classiccars(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source  = "ClassicCars"
     base    = "https://www.classiccars.com"
     listings: list[Listing] = []
@@ -1448,7 +1450,7 @@ async def scrape_classiccars(page: Page, query: str, debug: bool = False) -> lis
 
 # ─── Collecting Cars ──────────────────────────────────────────────────────────
 
-async def scrape_collecting(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_collecting(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Collecting Cars"
     base   = "https://collectingcars.com"
     listings: list[Listing] = []
@@ -1522,7 +1524,7 @@ async def scrape_collecting(page: Page, query: str, debug: bool = False) -> list
 
 # ─── duPont Registry ──────────────────────────────────────────────────────────
 
-async def scrape_dupont(page: Page, query: str, debug: bool = False) -> list[Listing]:
+async def scrape_dupont(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "duPont Registry"
     base   = "https://www.dupontregistry.com"
     listings: list[Listing] = []

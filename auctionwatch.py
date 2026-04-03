@@ -104,6 +104,8 @@ async def _scrape_all(
     site_keys: list[str],
     debug: bool = False,
     on_site_done=None,          # optional callback(site_key, listings_or_exception)
+    zip_code: str = "",
+    radius: int = 0,
 ) -> list[Listing]:
     """Run all scrapers in parallel; return combined listings."""
     active = {k: v for k, v in ALL_SITES.items() if k in site_keys}
@@ -121,7 +123,7 @@ async def _scrape_all(
 
         async def _one(i, key, scraper_fn):
             try:
-                result = await scraper_fn(pages[i], query, debug)
+                result = await scraper_fn(pages[i], query, debug, zip_code=zip_code, radius=radius)
             except Exception as e:
                 result = e
             if on_site_done:
@@ -487,6 +489,8 @@ async def run(
     only_inactive: bool = False,
     ignored: set[str] | None = None,
     start_id: str = "",
+    zip_code: str = "",
+    radius: int = 0,
 ):
     # sites is a list of keys from ALL_SITES; empty means all
     active = {k: v for k, v in ALL_SITES.items() if not sites or k in sites}
@@ -502,7 +506,7 @@ async def run(
     else:
         print(f"\nSearching for '{query}' across {len(active)} site(s)...\n")
 
-    listings = await _scrape_all(query, list(active.keys()), debug)
+    listings = await _scrape_all(query, list(active.keys()), debug, zip_code=zip_code, radius=radius)
 
     if only_active:
         listings = [l for l in listings if l.is_active is not False]
@@ -567,6 +571,10 @@ examples:
                         help="Port for --serve (default: 5173, or $PORT env var)")
     parser.add_argument("--host",  default="", metavar="HOST",
                         help="Host to bind for --serve (default: 127.0.0.1; use 0.0.0.0 for LAN access)")
+    parser.add_argument("--zip",    default="", metavar="ZIP",
+                        help="ZIP code for location-based search (Cars.com, eBay, CarMax)")
+    parser.add_argument("--radius", type=int, default=0, metavar="MILES",
+                        help="Search radius in miles from --zip (default: site default)")
     parser.add_argument(
         "--ignore", metavar="ID",
         help="Permanently hide listing with this 4-char ID from future results"
@@ -661,6 +669,8 @@ examples:
         only_inactive=args.inactive,
         ignored=store_get_ignored(),
         start_id=store_get_start(),
+        zip_code=args.zip,
+        radius=args.radius,
     ))
 
 
