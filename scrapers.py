@@ -1,5 +1,7 @@
+import json as _json
 import re
 import sys
+from datetime import datetime, timezone
 from urllib.parse import quote_plus, urlparse
 
 try:
@@ -788,6 +790,12 @@ async def scrape_carmax(page: Page, query: str, debug: bool = False) -> list[Lis
     listings: list[Listing] = []
     seen_stocks: set[str] = set()
 
+    query_words = [w.lower() for w in query.split() if len(w) > 1]
+
+    def _matches(title: str) -> bool:
+        t = title.lower()
+        return all(w in t for w in query_words)
+
     def _ingest(cars: list[dict]):
         for car in cars:
             stock = str(car.get("stockNumber", ""))
@@ -795,7 +803,7 @@ async def scrape_carmax(page: Page, query: str, debug: bool = False) -> list[Lis
                 continue
             seen_stocks.add(stock)
             lst = _carmax_listing(car, base, source)
-            if lst:
+            if lst and _matches(lst.title):
                 listings.append(lst)
 
     search_url = f"{base}/cars?search={quote_plus(query)}"
@@ -1041,4 +1049,450 @@ async def scrape_pf(page: Page, query: str, debug: bool = False) -> list[Listing
         raise
 
     _log(f"[{source}] Done — {len(listings)} listings")
+    return listings
+
+
+# ─── eBay Motors ──────────────────────────────────────────────────────────────
+
+_EBAY_JS = """() => {
+    const results = [];
+    document.querySelectorAll('li.s-card').forEach(card => {
+        const link = card.querySelector('.s-card__link:not(.image-treatment)');
+        if (!link) return;
+        const rawUrl = link.href || '';
+        if (!rawUrl.includes('/itm/')) return;
+        const url = rawUrl.split('?')[0];
+
+        const titleEl = card.querySelector('.s-card__title .su-styled-text');
+        const title = titleEl ? titleEl.textContent.trim() : '';
+        if (!title || title === 'Shop on eBay') return;
+
+        const priceEl = card.querySelector('.s-card__price');
+        const price = priceEl ? priceEl.textContent.trim() : '';
+
+        const timeEl = card.querySelector('.s-card__time-left');
+        const timeLeft = timeEl ? timeEl.textContent.trim() : '';
+
+        const imgEl = card.querySelector('img.s-card__image, .image-treatment img');
+        const imageUrl = imgEl ? (imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || '') : '';
+
+        results.push({ url, title, price, timeLeft, imageUrl: imageUrl.startsWith('data:') ? '' : imageUrl });
+    });
+    return results;
+}"""
+
+
+async def scrape_ebay(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source  = "eBay Motors"
+    base    = "https://www.ebay.com"
+    listings: list[Listing] = []
+    seen_urls: set[str] = set()
+
+    def _ingest(items: list[dict]):
+        for item in items:
+            url = item.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            title = item.get("title", "")
+            if not title:
+                continue
+            time_left = item.get("timeLeft", "")
+            # "2d 6h left" → "2D 6H"; no time = classified (no time_left)
+            if time_left:
+                time_left = re.sub(r'\s+left.*', '', time_left, flags=re.IGNORECASE).upper().strip()
+            listings.append(Listing(
+                title=title, url=url, source=source,
+                price=item.get("price", ""), time_left=time_left,
+                image_url=item.get("imageUrl", ""),
+            ))
+
+    try:
+        for page_num in range(1, 4):   # cap at 3 pages (~180 results)
+            url = (
+                f"{base}/sch/i.html?_nkw={quote_plus(query)}"
+                f"&_sacat=6001&_sop=12&_pgn={page_num}"
+            )
+            _log(f"[{source}] Fetching page {page_num}: {url}")
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(1500)
+
+            if debug and page_num == 1:
+                _save_debug(await page.content(), "ebay")
+
+            items = await page.evaluate(_EBAY_JS) or []
+            if not items:
+                break
+            before = len(listings)
+            _ingest(items)
+            new = len(listings) - before
+            _log(f"[{source}] Page {page_num}: {len(items)} items ({new} new)")
+            if new == 0:
+                break
+
+        _log(f"[{source}] Done — {len(listings)} listings")
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
+    return listings
+
+
+# ─── Hemmings ─────────────────────────────────────────────────────────────────
+
+def _hemmings_time_left(end_date: str | None) -> str:
+    """Convert Hemmings end_date ISO string to a time-left string."""
+    if not end_date:
+        return ""
+    try:
+        end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        delta = end - now
+        if delta.total_seconds() <= 0:
+            return "Ended"
+        d, rem = divmod(int(delta.total_seconds()), 86400)
+        h, rem = divmod(rem, 3600)
+        m = rem // 60
+        parts = []
+        if d: parts.append(f"{d}D")
+        if h: parts.append(f"{h}H")
+        if m or not parts: parts.append(f"{m}M")
+        return " ".join(parts)
+    except Exception:
+        return ""
+
+
+async def scrape_hemmings(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "Hemmings"
+    base   = "https://www.hemmings.com"
+    listings: list[Listing] = []
+    seen_ids: set[str] = set()
+
+    def _ingest(results: list[dict]):
+        for item in results:
+            item_id = str(item.get("id", ""))
+            if not item_id or item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            title = item.get("title", "") or ""
+            if not title:
+                continue
+            url = item.get("url", "") or ""
+            if not url:
+                continue
+            # Price: classified use price, auction use current_bid
+            price = item.get("current_bid") or item.get("current_price") or item.get("price") or ""
+            # Time left: derived from end_date for auctions
+            end_date = item.get("end_date")
+            status   = (item.get("status") or "").lower()
+            if status in ("sold", "ended", "expired"):
+                time_left = "Ended"
+            else:
+                time_left = _hemmings_time_left(end_date)
+            location = item.get("location") or ""
+            thumb = (item.get("thumbnail") or {}).get("md") or {}
+            image_url = thumb.get("4:3") or thumb.get("3:2") or thumb.get("full") or ""
+            listings.append(Listing(
+                title=title, url=url, source=source,
+                price=str(price) if price else "",
+                time_left=time_left, location=location, image_url=image_url,
+            ))
+
+    try:
+        _log(f"[{source}] Loading search page")
+        await page.goto(f"{base}/classifieds/cars-for-sale", wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        # Capture auth headers from the first API call (triggered by typing)
+        api_headers: dict = {}
+        first_url: list[str] = []
+
+        async def _on_request(req):
+            if "api.hemmings.com/v2/search/listings" in req.url and not api_headers:
+                api_headers.update(req.headers)
+                first_url.append(req.url)
+
+        page.on("request", _on_request)
+
+        search = await page.query_selector('[placeholder="Keyword Search"]')
+        if not search:
+            _log(f"[{source}] Search input not found", "warning")
+            return listings
+        await search.fill(query)
+        await search.press("Enter")
+        # Wait for the API call to fire and response to arrive
+        await page.wait_for_timeout(4000)
+
+        if not api_headers:
+            _log(f"[{source}] API headers not captured", "warning")
+            return listings
+
+        if debug:
+            _save_debug(await page.content(), "hemmings")
+
+        # Build the canonical paginated URL from the captured base
+        hem_secret = api_headers.get("hemmings-secret", "")
+        csrf_token  = api_headers.get("x-csrf-token", "")
+        api_base = (
+            f"https://api.hemmings.com/v2/search/listings"
+            f"?adtype=cars-for-sale&q={quote_plus(query)}"
+            f"&per_page=30&sort_by=recommended&members_preview=false"
+        )
+
+        for page_num in range(1, 6):  # up to 5 pages = 150 results
+            api_url = f"{api_base}&page={page_num}"
+            api_data = await page.evaluate(
+                """async (params) => {
+                    const r = await fetch(params.url, {
+                        headers: {
+                            'hemmings-secret': params.secret,
+                            'x-csrf-token':    params.csrf,
+                            'hemmings-client': '1',
+                            'x-requested-with': 'XMLHttpRequest',
+                            'accept': 'application/json',
+                        }
+                    });
+                    return r.ok ? await r.json() : null;
+                }""",
+                {"url": api_url, "secret": hem_secret, "csrf": csrf_token},
+            )
+            if not api_data:
+                break
+            results = api_data.get("results", [])
+            total   = api_data.get("total_count", 0)
+            before  = len(listings)
+            _ingest(results)
+            new = len(listings) - before
+            _log(f"[{source}] Page {page_num}: {len(results)} items ({new} new, total ~{total})")
+            if not results or len(results) < 30:
+                break
+
+        _log(f"[{source}] Done — {len(listings)} listings")
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
+    return listings
+
+
+# ─── ClassicCars.com ──────────────────────────────────────────────────────────
+
+async def scrape_classiccars(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source  = "ClassicCars"
+    base    = "https://www.classiccars.com"
+    listings: list[Listing] = []
+    seen_skus: set[str] = set()
+
+    def _ingest_jld(jlds: list[dict]):
+        for d in jlds:
+            if (d.get("@type") or "").lower() != "car":
+                continue
+            sku = d.get("sku", "")
+            if not sku or sku in seen_skus:
+                continue
+            seen_skus.add(sku)
+            name = d.get("name", "")
+            if not name:
+                continue
+            offers = d.get("offers") or {}
+            raw_url = offers.get("url", "")
+            url = f"{base}{raw_url}" if raw_url.startswith("/") else raw_url
+            if not url:
+                continue
+            price_val = offers.get("price")
+            price = f"${float(price_val):,.0f}" if price_val and str(price_val) not in ("0", "") else ""
+            image = (d.get("image") or {}).get("url", "")
+            listings.append(Listing(
+                title=name, url=url, source=source,
+                price=price, image_url=image,
+            ))
+
+    try:
+        for page_num in range(1, 6):  # up to 5 pages = 75 listings
+            url = f"{base}/listings/find?q={quote_plus(query)}" + (f"&page={page_num}" if page_num > 1 else "")
+            _log(f"[{source}] Fetching page {page_num}: {url}")
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(1000)
+
+            if debug and page_num == 1:
+                _save_debug(await page.content(), "classiccars")
+
+            jlds = await page.evaluate("""() => {
+                const out = [];
+                for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+                    try { out.push(JSON.parse(s.textContent)); } catch(e) {}
+                }
+                return out;
+            }""")
+            before = len(listings)
+            _ingest_jld(jlds or [])
+            new = len(listings) - before
+            _log(f"[{source}] Page {page_num}: {new} new listings")
+            if new == 0:
+                break
+
+        _log(f"[{source}] Done — {len(listings)} listings")
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
+    return listings
+
+
+# ─── Collecting Cars ──────────────────────────────────────────────────────────
+
+async def scrape_collecting(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "Collecting Cars"
+    base   = "https://collectingcars.com"
+    listings: list[Listing] = []
+    seen_urls: set[str] = set()
+
+    url = f"{base}/for-sale/?q={quote_plus(query)}"
+    try:
+        _log(f"[{source}] Fetching {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        if debug:
+            _save_debug(await page.content(), "collecting")
+
+        # Auction live/end data keyed by listing slug from NEXT_DATA
+        auction_by_slug: dict[str, dict] = {}
+        nd_data = await page.evaluate("""() => {
+            const el = document.getElementById('__NEXT_DATA__');
+            if (!el) return null;
+            try { return JSON.parse(el.textContent); } catch(e) { return null; }
+        }""")
+        if nd_data:
+            pp = nd_data.get("props", {}).get("pageProps", {})
+            # activeAuctions has bid/time data; match to for-sale links by position
+            # (auctionId only, no slug — use DOM order to associate)
+            # Just grab time data from NEXT_DATA if possible
+            pass  # Time will come from DOM via generic extractor
+
+        # Generic extractor — Collecting Cars is SSR'd for first page
+        items = await _eval_listings(page, 'a[href*="/for-sale/"]')
+        for item in items:
+            raw_url = item.get("url", "")
+            # Normalise: strip query params, ensure base
+            if not raw_url:
+                continue
+            clean_url = raw_url.split("?")[0]
+            if clean_url in seen_urls:
+                continue
+            seen_urls.add(clean_url)
+            title = item.get("title", "")
+            if not title:
+                # Derive from slug
+                slug = clean_url.rstrip("/").split("/")[-1]
+                title = slug.replace("-", " ").title()
+            listings.append(Listing(
+                title=title, url=clean_url, source=source,
+                price=item.get("price", ""), time_left=item.get("timeLeft", ""),
+                image_url=item.get("imageUrl", ""),
+            ))
+
+        _log(f"[{source}] Done — {len(listings)} listings")
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
+    return listings
+
+
+# ─── duPont Registry ──────────────────────────────────────────────────────────
+
+async def scrape_dupont(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "duPont Registry"
+    base   = "https://www.dupontregistry.com"
+    listings: list[Listing] = []
+    seen_ids: set[str] = set()
+
+    def _ingest(autos: list[dict]):
+        for car in autos:
+            car_id = str(car.get("id", ""))
+            if not car_id or car_id in seen_ids:
+                continue
+            seen_ids.add(car_id)
+            year  = car.get("year", "")
+            brand = (car.get("carBrand") or {}).get("name", "")
+            model = (car.get("carModel") or {}).get("name", "")
+            trim  = car.get("trim") or ""
+            title = " ".join(str(p) for p in [year, brand, model, trim] if p).strip()
+            if not title:
+                continue
+            price_val = car.get("price")
+            price = f"${price_val:,.0f}" if price_val else ""
+            miles_val = car.get("mileage")
+            mileage = f"{int(miles_val):,} mi" if miles_val and int(miles_val) > 0 else ""
+            city  = car.get("city", "") or ""
+            state = car.get("state", "") or ""
+            location = f"{city}, {state}" if city and state else city or state
+            brand_alias = (car.get("carBrand") or {}).get("alias", "")
+            model_alias = (car.get("carModel") or {}).get("alias", "")
+            listing_url = f"{base}/autos/listing/{year}/{brand_alias}/{model_alias}/{car_id}"
+            photos = car.get("photos") or []
+            image_url = ""
+            if photos:
+                img_data = photos[0].get("image") or {}
+                image_url = img_data.get("width_480") or img_data.get("width_292") or ""
+            listings.append(Listing(
+                title=title, url=listing_url, source=source,
+                price=price, mileage=mileage, location=location, image_url=image_url,
+            ))
+
+    try:
+        for page_num in range(1, 6):  # up to 5 pages
+            url = f"{base}/autos/results?search_text={quote_plus(query)}&page={page_num}"
+            _log(f"[{source}] Fetching page {page_num}: {url}")
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(1500)
+
+            if debug and page_num == 1:
+                _save_debug(await page.content(), "dupont")
+
+            nd_data = await page.evaluate("""() => {
+                const el = document.getElementById('__NEXT_DATA__');
+                if (!el) return null;
+                try { return JSON.parse(el.textContent); } catch(e) { return null; }
+            }""")
+            if not nd_data:
+                break
+            autos = (nd_data.get("props", {})
+                           .get("pageProps", {})
+                           .get("initialState", {})
+                           .get("autosState", {})
+                           .get("response", []))
+            before = len(listings)
+            _ingest(autos)
+            new = len(listings) - before
+            _log(f"[{source}] Page {page_num}: {len(autos)} items ({new} new)")
+            if not autos or len(autos) < 27:
+                break
+
+        _log(f"[{source}] Done — {len(listings)} listings")
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
     return listings
