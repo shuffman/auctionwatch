@@ -402,22 +402,66 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
         _log(f"[{source}] Page loaded, extracting listings")
 
         await _scroll_to_bottom(page)
+        raw = await page.evaluate("""() => {
+            const YEAR_RE = /\\b(19[5-9]\\d|20[0-3]\\d)\\b/;
+            const results = [];
+            const seen = new Set();
+            document.querySelectorAll(
+                'a[href*="/marketplace/auction/"], a[href*="/marketplace/listings/"]'
+            ).forEach(link => {
+                const url = link.href.split('?')[0];
+                if (!url || seen.has(url)) return;
+                seen.add(url);
+
+                // Walk up to find the card boundary
+                let card = link, el = link.parentElement;
+                for (let i = 0; i < 8; i++) {
+                    if (!el || el === document.body) break;
+                    const hrefs = new Set(
+                        Array.from(el.querySelectorAll(
+                            'a[href*="/marketplace/auction/"], a[href*="/marketplace/listings/"]'
+                        )).map(a => a.href.split('?')[0])
+                    );
+                    if (hrefs.size > 1) break;
+                    card = el;
+                    el = el.parentElement;
+                }
+
+                const cardText = card.textContent.replace(/\\s+/g, ' ').trim();
+                const h = card.querySelector('h2, h3, h4, strong');
+                let title = h ? h.textContent.trim() : '';
+                if (!title) title = link.textContent.trim();
+
+                // If title lacks a year, find one in the full card text
+                if (title && !YEAR_RE.test(title)) {
+                    const m = cardText.match(YEAR_RE);
+                    if (m) title = m[1] + ' ' + title;
+                }
+
+                const img = card.querySelector('img');
+                const priceEl = Array.from(card.querySelectorAll('*')).find(e =>
+                    e.children.length === 0 && /^\\$[\\d,]+$/.test(e.textContent.trim())
+                );
+                const price = priceEl ? priceEl.textContent.trim() : '';
+
+                results.push({ url, title, cardText, price,
+                    imageUrl: img ? (img.src || img.dataset.src || '') : '' });
+            });
+            return results;
+        }""")
         seen_urls: set[str] = set()
-        for selector in ('a[href*="/marketplace/auction/"]', 'a[href*="/marketplace/listings/"]'):
-            for item in (await _eval_listings(page, selector)):
-                title = item.get("title", "")
-                url = item.get("url", "")
-                if not title or not url or url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                # Filter out Hagerty promotional/UI entries
-                if re.search(r'why hagerty|hagerty marketplace\?', title, re.IGNORECASE):
-                    continue
-                listings.append(Listing(
-                    title=title, url=url, source=source,
-                    price=item.get("price", ""), time_left=item.get("timeLeft", ""),
-                    location=item.get("location", ""), image_url=item.get("imageUrl", ""),
-                ))
+        for item in (raw or []):
+            title = item.get("title", "")
+            url = item.get("url", "")
+            if not title or not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            if re.search(r'why hagerty|hagerty marketplace\?', title, re.IGNORECASE):
+                continue
+            listings.append(Listing(
+                title=title, url=url, source=source,
+                price=item.get("price", ""), image_url=item.get("imageUrl", ""),
+            ))
         _log(f"[{source}] Done — {len(listings)} listings")
 
     except PlaywrightTimeout:
