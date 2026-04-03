@@ -153,6 +153,14 @@ _WEB_HTML = r"""<!DOCTYPE html>
     #zip:focus, #radius:focus { border-color: var(--accent); }
     #radius { color: #888; }
     .loc-label { font-size: 0.75rem; color: #444; white-space: nowrap; }
+    #presets-row { gap: 0.35rem; }
+    .preset-btn {
+      padding: 0.22rem 0.65rem; border-radius: 20px; font-size: 0.71rem; font-weight: 600;
+      border: 1px solid #2a2a2a; background: none; color: #555; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .preset-btn:hover { border-color: #444; color: #888; }
+    .preset-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(0,188,212,0.07); }
 
     /* ── Filter bar ── */
     #filters {
@@ -341,6 +349,11 @@ _WEB_HTML = r"""<!DOCTYPE html>
         <option value="500">500 mi</option>
       </select>
     </div>
+    <div class="sf-row" id="presets-row">
+      <button class="preset-btn" id="preset-auction" type="button">Auctions</button>
+      <button class="preset-btn" id="preset-fixed"   type="button">Fixed Price</button>
+      <button class="preset-btn" id="preset-all"     type="button">All</button>
+    </div>
     <div class="pills" id="spills">
       <div class="pill on" data-site="cab"     data-label="C&amp;B">C&amp;B</div>
       <div class="pill on" data-site="bat"     data-label="BaT">BaT</div>
@@ -412,6 +425,26 @@ let st = { bysite:{}, siteData:{}, serverStart:'', lastQ:'', lastT:'', starred:n
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
 function activeSites(){ return [...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site) }
+
+const AUCTION_SITES    = new Set(['cab','bat','hagerty','pcar','collecting','ebay']);
+const FIXEDPRICE_SITES = new Set(['cl','carscom','pf','carmax','carvana','hemmings','classiccars','dupont']);
+
+function applyPreset(which) {
+  document.querySelectorAll('#spills .pill[data-site]').forEach(p => {
+    const s = p.dataset.site;
+    const on = which === 'all'
+      || (which === 'auction'    && AUCTION_SITES.has(s))
+      || (which === 'fixed'      && FIXEDPRICE_SITES.has(s));
+    p.classList.toggle('on', on);
+  });
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  if(which !== 'all') document.getElementById('preset-' + which)?.classList.add('active');
+  stateToUrl();
+}
+
+document.getElementById('preset-auction').addEventListener('click', () => applyPreset('auction'));
+document.getElementById('preset-fixed').addEventListener('click',   () => applyPreset('fixed'));
+document.getElementById('preset-all').addEventListener('click',     () => applyPreset('all'));
 
 function tlMinutes(tl){
   const t=(tl||'').trim();
