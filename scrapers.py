@@ -1359,7 +1359,12 @@ async def scrape_collecting(page: Page, query: str, debug: bool = False) -> list
     listings: list[Listing] = []
     seen_urls: set[str] = set()
 
-    url = f"{base}/for-sale/?q={quote_plus(query)}"
+    url = (
+        f"{base}/buy"
+        f"?refinementList%5BlistingStage%5D%5B0%5D=live"
+        f"&refinementList%5BregionCode%5D%5B0%5D=US"
+        f"&query={quote_plus(query)}"
+    )
     try:
         _log(f"[{source}] Fetching {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)

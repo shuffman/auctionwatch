@@ -854,7 +854,7 @@ fetch('/api/searches').then(r=>r.json()).then(d=>{ recentSearches = d.searches||
 """
 
 
-def serve_web(initial_query: str = "", port: int = 5173):
+def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
     try:
         from flask import Flask, Response, request as freq, jsonify
     except ImportError:
@@ -1067,7 +1067,8 @@ def serve_web(initial_query: str = "", port: int = 5173):
     # In a server environment (Railway etc.) PORT is set; bind publicly and skip browser open
     server_port = int(os.environ.get("PORT", port))
     is_server   = "PORT" in os.environ
-    host        = "0.0.0.0" if is_server else "127.0.0.1"
+    if not host:
+        host = "0.0.0.0" if is_server else "127.0.0.1"
 
     url = f"http://{host}:{server_port}"
     if HAS_RICH:

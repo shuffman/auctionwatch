@@ -565,6 +565,8 @@ examples:
     parser.add_argument("--serve", action="store_true", help="Start interactive web UI")
     parser.add_argument("--port",  type=int, default=int(os.environ.get("PORT", 5173)), metavar="PORT",
                         help="Port for --serve (default: 5173, or $PORT env var)")
+    parser.add_argument("--host",  default="", metavar="HOST",
+                        help="Host to bind for --serve (default: 127.0.0.1; use 0.0.0.0 for LAN access)")
     parser.add_argument(
         "--ignore", metavar="ID",
         help="Permanently hide listing with this 4-char ID from future results"
@@ -639,7 +641,7 @@ examples:
 
     if args.serve:
         from web import serve_web
-        serve_web(initial_query=args.query or "", port=args.port)
+        serve_web(initial_query=args.query or "", port=args.port, host=args.host)
         return
 
     if not args.query:
