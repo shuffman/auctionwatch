@@ -42,6 +42,8 @@ SOURCE_COLORS_RICH = {
     "PCar Market": "magenta",
     "Craigslist": "orange1",
     "Porsche Finder": "red",
+    "CarMax": "red",
+    "Carvana": "cyan",
 }
 
 SOURCE_COLORS_HTML = {
@@ -52,4 +54,6 @@ SOURCE_COLORS_HTML = {
     "Craigslist": "#ff9800",
     "Cars.com":   "#e91e63",
     "Porsche Finder": "#d5001c",
+    "CarMax":  "#c9201f",
+    "Carvana": "#00a78e",
 }

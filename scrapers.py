@@ -740,6 +740,214 @@ async def scrape_pcarmarket(page: Page, query: str, debug: bool = False) -> list
     return listings
 
 
+_CARMAX_JS = """() => {
+    let cars = [], totalCount = 0, zipCode = '', requestedUrl = '/cars';
+    for (const s of document.scripts) {
+        const t = s.textContent;
+        const cm = t.match(/const cars = ([\\s\\S]*?\\]);\\n/);
+        if (cm) { try { cars = JSON.parse(cm[1]); } catch(e) {} }
+        const tm = t.match(/totalCount = (\\d+)/);
+        if (tm && !totalCount) totalCount = parseInt(tm[1]);
+        const zm = t.match(/"zipCode":"(\\d{5})"/);
+        if (zm && !zipCode) zipCode = zm[1];
+        const rm = t.match(/"requestedUrl":"([^"]+)"/);
+        if (rm && requestedUrl === '/cars') requestedUrl = rm[1];
+    }
+    return { cars, totalCount, zipCode, requestedUrl };
+}"""
+
+
+def _carmax_listing(car: dict, base: str, source: str) -> "Listing | None":
+    stock = str(car.get("stockNumber", ""))
+    if not stock:
+        return None
+    year  = car.get("year", "")
+    make  = car.get("make", "")
+    model = car.get("model", "")
+    trim  = car.get("trim") or ""
+    title = " ".join(str(p) for p in [year, make, model, trim] if p).strip()
+    if not title:
+        return None
+    price_val = car.get("basePrice")
+    price     = f"${price_val:,.0f}" if price_val else ""
+    miles_val = car.get("mileage")
+    mileage   = f"{int(miles_val):,} mi" if miles_val else ""
+    city      = car.get("storeCity", "")
+    state     = car.get("stateAbbreviation", "")
+    location  = f"{city}, {state}" if city and state else city or state
+    return Listing(
+        title=title, url=f"{base}/car/{stock}", source=source,
+        price=price, mileage=mileage, location=location,
+        image_url=car.get("heroImageUrl", "") or "",
+    )
+
+
+async def scrape_carmax(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "CarMax"
+    base   = "https://www.carmax.com"
+    listings: list[Listing] = []
+    seen_stocks: set[str] = set()
+
+    def _ingest(cars: list[dict]):
+        for car in cars:
+            stock = str(car.get("stockNumber", ""))
+            if not stock or stock in seen_stocks:
+                continue
+            seen_stocks.add(stock)
+            lst = _carmax_listing(car, base, source)
+            if lst:
+                listings.append(lst)
+
+    search_url = f"{base}/cars?search={quote_plus(query)}"
+    try:
+        _log(f"[{source}] Fetching {search_url}")
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        if debug:
+            _save_debug(await page.content(), "carmax")
+
+        page_data = await page.evaluate(_CARMAX_JS) or {}
+        cars         = page_data.get("cars", []) or []
+        total_count  = page_data.get("totalCount", 0) or 0
+        zip_code     = page_data.get("zipCode", "") or ""
+        requested_url = page_data.get("requestedUrl", "/cars") or "/cars"
+
+        _ingest(cars)
+        _log(f"[{source}] Page 1: {len(cars)} items (total ~{total_count})")
+
+        # Paginate via internal search API (same endpoint the page uses for "See more")
+        if len(cars) >= 24 and total_count > 24 and zip_code and requested_url:
+            import uuid as _uuid
+            visitor_id = str(_uuid.uuid4())
+            skip = 24
+            max_pages = 4  # up to 5 pages total (~120 results)
+
+            while skip < total_count and skip < 24 * (max_pages + 1):
+                api_url = (
+                    f"{base}/cars/api/search/run"
+                    f"?uri={quote_plus(requested_url)}&skip={skip}&take=24"
+                    f"&zipCode={zip_code}&shipping=-1&sort=bestmatch"
+                    f"&visitorID={visitor_id}"
+                )
+                api_data = await page.evaluate(
+                    """async (url) => {
+                        const r = await fetch(url, {credentials:'include'});
+                        return r.ok ? await r.json() : null;
+                    }""",
+                    api_url,
+                )
+                if not api_data:
+                    break
+                batch = api_data.get("items") or []
+                before = len(listings)
+                _ingest(batch)
+                new = len(listings) - before
+                page_num = skip // 24 + 1
+                _log(f"[{source}] Page {page_num}: {len(batch)} items ({new} new)")
+                if len(batch) < 24:
+                    break
+                skip += 24
+                await page.wait_for_timeout(400)
+
+        _log(f"[{source}] Done — {len(listings)} listings")
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
+    return listings
+
+
+async def scrape_carvana(page: Page, query: str, debug: bool = False) -> list[Listing]:
+    source = "Carvana"
+    base   = "https://www.carvana.com"
+    listings: list[Listing] = []
+    seen_urls: set[str] = set()
+
+    search_url = f"{base}/cars?search={quote_plus(query)}"
+    try:
+        _log(f"[{source}] Fetching {search_url}")
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+
+        # Carvana uses Cloudflare Turnstile — wait up to 10s for it to clear
+        for _ in range(10):
+            title = await page.title()
+            if "Just a moment" not in title:
+                break
+            await page.wait_for_timeout(1000)
+        else:
+            _log(f"[{source}] Blocked by Cloudflare challenge — skipping", "warning")
+            return listings
+
+        await page.wait_for_timeout(2000)
+
+        if debug:
+            _save_debug(await page.content(), "carvana")
+
+        # Extract via JSON-LD (Carvana embeds Car structured data like CarMax)
+        items = await page.evaluate("""() => {
+            const results = [];
+            for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+                try {
+                    const d = JSON.parse(s.textContent);
+                    if (d['@type'] === 'Car' || d['@type'] === 'Vehicle') results.push(d);
+                    if (d['@type'] === 'ItemList') {
+                        for (const el of (d.itemListElement || [])) results.push(el);
+                    }
+                } catch(e) {}
+            }
+            return results;
+        }""")
+
+        if not items:
+            # Fallback: generic extractor for /vehicle/ links
+            raw = await _eval_listings(page, 'a[href*="/vehicle/"]')
+            for item in raw:
+                url = item.get("url", "")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                listings.append(Listing(
+                    title=item.get("title", ""), url=url, source=source,
+                    price=item.get("price", ""), image_url=item.get("imageUrl", ""),
+                ))
+        else:
+            for item in items:
+                offers   = item.get("offers") or {}
+                item_url = offers.get("url") or item.get("url", "")
+                if not item_url or item_url in seen_urls:
+                    continue
+                seen_urls.add(item_url)
+                year   = str(item.get("vehicleModelDate") or item.get("modelDate") or "")[:4]
+                name   = item.get("name") or ""
+                config = item.get("vehicleConfiguration") or ""
+                title  = name or f"{year} {config}".strip()
+                price_val = offers.get("price")
+                price  = f"${price_val:,.0f}" if price_val else ""
+                miles_val = (item.get("mileageFromOdometer") or {}).get("value")
+                mileage = f"{int(miles_val):,} mi" if miles_val and int(miles_val) > 0 else ""
+                listings.append(Listing(
+                    title=title, url=item_url, source=source,
+                    price=price, mileage=mileage,
+                    image_url=item.get("image") or "",
+                ))
+
+        _log(f"[{source}] Done — {len(listings)} listings")
+
+    except PlaywrightTimeout:
+        _log(f"[{source}] Timed out", "warning")
+        raise
+    except Exception as e:
+        _log(f"[{source}] Error: {e}", "error")
+        raise
+
+    return listings
+
+
 async def scrape_pf(page: Page, query: str, debug: bool = False) -> list[Listing]:
     source = "Porsche Finder"
     base = "https://finder.porsche.com/us/en-US"

@@ -37,7 +37,7 @@ from store import (
 from scrapers import (
     HAS_RICH, _console, _log,
     scrape_carsandbids, scrape_bat, scrape_hagerty, scrape_pcarmarket,
-    scrape_craigslist, scrape_cars_com, scrape_pf,
+    scrape_craigslist, scrape_cars_com, scrape_pf, scrape_carmax, scrape_carvana,
 )
 
 
@@ -51,6 +51,8 @@ ALL_SITES = {
     "pf":      ("Porsche Finder", "red",     scrape_pf),
     "cl":      ("Craigslist",     "orange1", scrape_craigslist),
     "carscom": ("Cars.com",       "yellow",  scrape_cars_com),
+    "carmax":  ("CarMax",         "red",     scrape_carmax),
+    "carvana": ("Carvana",        "cyan",    scrape_carvana),
 }
 
 
@@ -592,6 +594,10 @@ examples:
                             help="Search Porsche Finder (finder.porsche.com)")
     site_group.add_argument("--cl",      dest="sites", action="append_const", const="cl",
                             help="Search Craigslist (west coast metros)")
+    site_group.add_argument("--carmax",  dest="sites", action="append_const", const="carmax",
+                            help="Search CarMax")
+    site_group.add_argument("--carvana", dest="sites", action="append_const", const="carvana",
+                            help="Search Carvana")
 
     args = parser.parse_args()
 
