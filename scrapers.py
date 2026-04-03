@@ -382,6 +382,89 @@ async def scrape_bat(page: Page, query: str, debug: bool = False) -> list[Listin
     return listings
 
 
+_HAGERTY_LINK_SEL = (
+    'a[href*="/marketplace/auction/"], '
+    'a[href*="/marketplace/classified/"], '
+    'a[href*="/marketplace/listings/"]'
+)
+
+_HAGERTY_JS = f"""() => {{
+    const LINK_SEL = '{_HAGERTY_LINK_SEL.replace("'", "\\'")}';
+    const YEAR_RE  = /\\b(19[5-9]\\d|20[0-3]\\d)\\b/;
+    const results  = [];
+    const seen     = new Set();
+
+    document.querySelectorAll(LINK_SEL).forEach(link => {{
+        const url = link.href.split('?')[0];
+        if (!url || seen.has(url)) return;
+        seen.add(url);
+
+        // Walk up to card boundary (stop when parent contains multiple distinct links)
+        let card = link, el = link.parentElement;
+        for (let i = 0; i < 8; i++) {{
+            if (!el || el === document.body) break;
+            const hrefs = new Set(Array.from(el.querySelectorAll(LINK_SEL)).map(a => a.href.split('?')[0]));
+            if (hrefs.size > 1) break;
+            card = el; el = el.parentElement;
+        }}
+
+        const cardText = card.textContent.replace(/\\s+/g, ' ').trim();
+
+        // Title: prefer h4 > h3 > h2 > strong, then fall back to largest text span
+        const h = card.querySelector('h4, h3, h2, strong');
+        let title = h ? h.textContent.trim() : '';
+        if (!title) title = link.textContent.trim();
+        // Prepend year if missing
+        if (title && !YEAR_RE.test(title)) {{
+            const m = cardText.match(YEAR_RE);
+            if (m) title = m[1] + ' ' + title;
+        }}
+
+        // Price: look for "$X,XXX" leaf, or adjacent $ + number spans
+        let price = '';
+        const priceEl = Array.from(card.querySelectorAll('*')).find(e =>
+            e.children.length === 0 && /^\\$[\\d,]+$/.test(e.textContent.trim())
+        );
+        if (priceEl) {{
+            price = priceEl.textContent.trim();
+        }} else {{
+            const dollarEl = Array.from(card.querySelectorAll('*')).find(e =>
+                e.children.length === 0 && e.textContent.trim() === '$'
+            );
+            if (dollarEl?.parentElement) {{
+                const sibs = Array.from(dollarEl.parentElement.children);
+                const next = sibs[sibs.indexOf(dollarEl) + 1];
+                if (next && /^[\\d,]+$/.test(next.textContent.trim()))
+                    price = '$' + next.textContent.trim();
+            }}
+        }}
+
+        // Time left: parse card text patterns
+        //   Active:   "5 days Bid ..."  or  "3 hours Bid ..."
+        //   Ended:    "Bid to $ X on MM/DD/YY ..."
+        //   Sold:     "Sold for $ X on MM/DD/YY ..."
+        //   Classified: "Asking price $ X ..."  (no time)
+        let timeLeft = '';
+        const dayM  = cardText.match(/^(\\d+)\\s*days?\\b/i);
+        const hourM = cardText.match(/^(\\d+)\\s*hours?\\b/i);
+        const minM  = cardText.match(/^(\\d+)\\s*min/i);
+        if (dayM)       timeLeft = dayM[1]  + 'D';
+        else if (hourM) timeLeft = hourM[1] + 'H';
+        else if (minM)  timeLeft = minM[1]  + 'M';
+        else if (/Sold for/i.test(cardText))  timeLeft = 'Sold';
+        else if (/Bid to/i.test(cardText))    timeLeft = 'Ended';
+        // "Asking price" = classified, leave timeLeft = ''
+
+        const img = card.querySelector('img');
+        const imageUrl = img ? (img.src || img.dataset.src || '') : '';
+
+        results.push({{ url, title, price, timeLeft,
+            imageUrl: imageUrl.startsWith('data:') ? '' : imageUrl }});
+    }});
+    return results;
+}}"""
+
+
 async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Listing]:
     source = "Hagerty"
     base = "https://www.hagerty.com"
@@ -395,64 +478,16 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
         if debug:
             _save_debug(await page.content(), "hagerty")
 
-        await page.wait_for_selector(
-            'a[href*="/marketplace/auction/"], a[href*="/marketplace/listings/"]',
-            timeout=20000,
-        )
+        await page.wait_for_selector(_HAGERTY_LINK_SEL, timeout=20000)
         _log(f"[{source}] Page loaded, extracting listings")
 
         await _scroll_to_bottom(page)
-        raw = await page.evaluate("""() => {
-            const YEAR_RE = /\\b(19[5-9]\\d|20[0-3]\\d)\\b/;
-            const results = [];
-            const seen = new Set();
-            document.querySelectorAll(
-                'a[href*="/marketplace/auction/"], a[href*="/marketplace/listings/"]'
-            ).forEach(link => {
-                const url = link.href.split('?')[0];
-                if (!url || seen.has(url)) return;
-                seen.add(url);
+        raw = await page.evaluate(_HAGERTY_JS) or []
 
-                // Walk up to find the card boundary
-                let card = link, el = link.parentElement;
-                for (let i = 0; i < 8; i++) {
-                    if (!el || el === document.body) break;
-                    const hrefs = new Set(
-                        Array.from(el.querySelectorAll(
-                            'a[href*="/marketplace/auction/"], a[href*="/marketplace/listings/"]'
-                        )).map(a => a.href.split('?')[0])
-                    );
-                    if (hrefs.size > 1) break;
-                    card = el;
-                    el = el.parentElement;
-                }
-
-                const cardText = card.textContent.replace(/\\s+/g, ' ').trim();
-                const h = card.querySelector('h2, h3, h4, strong');
-                let title = h ? h.textContent.trim() : '';
-                if (!title) title = link.textContent.trim();
-
-                // If title lacks a year, find one in the full card text
-                if (title && !YEAR_RE.test(title)) {
-                    const m = cardText.match(YEAR_RE);
-                    if (m) title = m[1] + ' ' + title;
-                }
-
-                const img = card.querySelector('img');
-                const priceEl = Array.from(card.querySelectorAll('*')).find(e =>
-                    e.children.length === 0 && /^\\$[\\d,]+$/.test(e.textContent.trim())
-                );
-                const price = priceEl ? priceEl.textContent.trim() : '';
-
-                results.push({ url, title, cardText, price,
-                    imageUrl: img ? (img.src || img.dataset.src || '') : '' });
-            });
-            return results;
-        }""")
         seen_urls: set[str] = set()
-        for item in (raw or []):
+        for item in raw:
             title = item.get("title", "")
-            url = item.get("url", "")
+            url   = item.get("url", "")
             if not title or not url or url in seen_urls:
                 continue
             seen_urls.add(url)
@@ -460,7 +495,9 @@ async def scrape_hagerty(page: Page, query: str, debug: bool = False) -> list[Li
                 continue
             listings.append(Listing(
                 title=title, url=url, source=source,
-                price=item.get("price", ""), image_url=item.get("imageUrl", ""),
+                price=item.get("price", ""),
+                time_left=item.get("timeLeft", ""),
+                image_url=item.get("imageUrl", ""),
             ))
         _log(f"[{source}] Done — {len(listings)} listings")
 
