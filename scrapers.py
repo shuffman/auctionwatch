@@ -1392,6 +1392,8 @@ async def scrape_collecting(page: Page, query: str, debug: bool = False) -> list
             pass  # Time will come from DOM via generic extractor
 
         # Generic extractor — Collecting Cars is SSR'd for first page
+        query_words = [w.lower() for w in query.split() if len(w) > 1]
+
         items = await _eval_listings(page, 'a[href*="/for-sale/"]')
         for item in items:
             raw_url = item.get("url", "")
@@ -1407,6 +1409,8 @@ async def scrape_collecting(page: Page, query: str, debug: bool = False) -> list
                 # Derive from slug
                 slug = clean_url.rstrip("/").split("/")[-1]
                 title = slug.replace("-", " ").title()
+            if not all(w in title.lower() for w in query_words):
+                continue
             listings.append(Listing(
                 title=title, url=clean_url, source=source,
                 price=item.get("price", ""), time_left=item.get("timeLeft", ""),
