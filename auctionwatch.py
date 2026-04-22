@@ -9,6 +9,7 @@ Usage:
     python auctionwatch.py "alfa romeo" --json
     python auctionwatch.py "land rover defender" --debug
 """
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -38,7 +39,7 @@ from scrapers import (
     HAS_RICH, _console, _log,
     scrape_carsandbids, scrape_bat, scrape_hagerty, scrape_pcarmarket,
     scrape_craigslist, scrape_cars_com, scrape_pf, scrape_carmax, scrape_carvana,
-    scrape_ebay, scrape_hemmings, scrape_classiccars, scrape_collecting, scrape_dupont,
+    scrape_ebay, scrape_hemmings,
 )
 
 
@@ -56,9 +57,6 @@ ALL_SITES = {
     "carvana":   ("Carvana",        "cyan",    scrape_carvana),
     "ebay":      ("eBay Motors",    "red",     scrape_ebay),
     "hemmings":  ("Hemmings",       "red",     scrape_hemmings),
-    "classiccars":("ClassicCars",   "blue",    scrape_classiccars),
-    "collecting":("Collecting Cars","white",   scrape_collecting),
-    "dupont":    ("duPont Registry","yellow",  scrape_dupont),
 }
 
 

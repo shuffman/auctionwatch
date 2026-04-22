@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json as _json
 import re
 import sys
@@ -347,8 +349,10 @@ async def scrape_bat(page: Page, query: str, debug: bool = False, zip_code: str 
         _log(f"[{source}] Page loaded, extracting listings")
 
         await _scroll_to_bottom(page)
-        # After scrolling, wait for any AJAX-loaded completed listings to settle
-        await page.wait_for_load_state("networkidle", timeout=10000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except PlaywrightTimeout:
+            pass
 
         if debug:
             _save_debug(await page.content(), "bat")
@@ -388,8 +392,9 @@ _HAGERTY_LINK_SEL = (
     'a[href*="/marketplace/listings/"]'
 )
 
+_HAGERTY_LINK_SEL_ESC = _HAGERTY_LINK_SEL.replace("'", "\\'")
 _HAGERTY_JS = f"""() => {{
-    const LINK_SEL = '{_HAGERTY_LINK_SEL.replace("'", "\\'")}';
+    const LINK_SEL = '{_HAGERTY_LINK_SEL_ESC}';
     const YEAR_RE  = /\\b(19[5-9]\\d|20[0-3]\\d)\\b/;
     const results  = [];
     const seen     = new Set();
@@ -527,7 +532,7 @@ _CARS_COM_JS = """() => {
                             ?.textContent?.trim() || '';
         const img     = card.querySelector('img');
         results.push({
-            url:      link.href,
+            url:      link.href.split('?')[0],
             title,
             price,
             mileage,
@@ -1020,7 +1025,8 @@ async def scrape_carvana(page: Page, query: str, debug: bool = False, zip_code: 
                 title  = name or f"{year} {config}".strip()
                 price_val = offers.get("price")
                 price  = f"${price_val:,.0f}" if price_val else ""
-                miles_val = (item.get("mileageFromOdometer") or {}).get("value")
+                mileage_raw = item.get("mileageFromOdometer")
+                miles_val = mileage_raw.get("value") if isinstance(mileage_raw, dict) else mileage_raw
                 mileage = f"{int(miles_val):,} mi" if miles_val and int(miles_val) > 0 else ""
                 listings.append(Listing(
                     title=title, url=item_url, source=source,
@@ -1081,11 +1087,15 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
             }""")
 
             if not items:
+                if debug:
+                    _log(f"[{source}] No JSON-LD ItemList on page {page_num} — check debug_pf.html", "warning")
                 break
 
             for item in items:
                 offers   = item.get("offers") or {}
-                raw_url  = offers.get("url", "")
+                if isinstance(offers, list):
+                    offers = offers[0] if offers else {}
+                raw_url  = offers.get("url", "") or item.get("url", "")
                 clean_url = raw_url.split("?")[0]  # strip position/model params
                 if not clean_url or clean_url in seen_urls:
                     continue
@@ -1376,233 +1386,3 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False, zip_code:
     return listings
 
 
-# ─── ClassicCars.com ──────────────────────────────────────────────────────────
-
-async def scrape_classiccars(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
-    source  = "ClassicCars"
-    base    = "https://www.classiccars.com"
-    listings: list[Listing] = []
-    seen_skus: set[str] = set()
-
-    query_words = [w.lower() for w in query.split() if len(w) > 1]
-
-    def _ingest_jld(jlds: list[dict]):
-        for d in jlds:
-            if (d.get("@type") or "").lower() != "car":
-                continue
-            sku = d.get("sku", "")
-            if not sku or sku in seen_skus:
-                continue
-            seen_skus.add(sku)
-            name = d.get("name", "")
-            if not name:
-                continue
-            if not all(w in name.lower() for w in query_words):
-                continue
-            offers = d.get("offers") or {}
-            raw_url = offers.get("url", "")
-            url = f"{base}{raw_url}" if raw_url.startswith("/") else raw_url
-            if not url:
-                continue
-            price_val = offers.get("price")
-            price = f"${float(price_val):,.0f}" if price_val and str(price_val) not in ("0", "") else ""
-            image = (d.get("image") or {}).get("url", "")
-            listings.append(Listing(
-                title=name, url=url, source=source,
-                price=price, image_url=image,
-            ))
-
-    try:
-        for page_num in range(1, 6):  # up to 5 pages = 75 listings
-            url = f"{base}/listings/find?q={quote_plus(query)}" + (f"&page={page_num}" if page_num > 1 else "")
-            _log(f"[{source}] Fetching page {page_num}: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(1000)
-
-            if debug and page_num == 1:
-                _save_debug(await page.content(), "classiccars")
-
-            jlds = await page.evaluate("""() => {
-                const out = [];
-                for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
-                    try { out.push(JSON.parse(s.textContent)); } catch(e) {}
-                }
-                return out;
-            }""")
-            before = len(listings)
-            _ingest_jld(jlds or [])
-            new = len(listings) - before
-            _log(f"[{source}] Page {page_num}: {new} new listings")
-            if new == 0:
-                break
-
-        _log(f"[{source}] Done — {len(listings)} listings")
-
-    except PlaywrightTimeout:
-        _log(f"[{source}] Timed out", "warning")
-        raise
-    except Exception as e:
-        _log(f"[{source}] Error: {e}", "error")
-        raise
-
-    return listings
-
-
-# ─── Collecting Cars ──────────────────────────────────────────────────────────
-
-async def scrape_collecting(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
-    source = "Collecting Cars"
-    base   = "https://collectingcars.com"
-    listings: list[Listing] = []
-    seen_urls: set[str] = set()
-
-    url = (
-        f"{base}/buy"
-        f"?refinementList%5BlistingStage%5D%5B0%5D=live"
-        f"&refinementList%5BregionCode%5D%5B0%5D=US"
-        f"&query={quote_plus(query)}"
-    )
-    try:
-        _log(f"[{source}] Fetching {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
-
-        if debug:
-            _save_debug(await page.content(), "collecting")
-
-        # Auction live/end data keyed by listing slug from NEXT_DATA
-        auction_by_slug: dict[str, dict] = {}
-        nd_data = await page.evaluate("""() => {
-            const el = document.getElementById('__NEXT_DATA__');
-            if (!el) return null;
-            try { return JSON.parse(el.textContent); } catch(e) { return null; }
-        }""")
-        if nd_data:
-            pp = nd_data.get("props", {}).get("pageProps", {})
-            # activeAuctions has bid/time data; match to for-sale links by position
-            # (auctionId only, no slug — use DOM order to associate)
-            # Just grab time data from NEXT_DATA if possible
-            pass  # Time will come from DOM via generic extractor
-
-        # Generic extractor — Collecting Cars is SSR'd for first page
-        query_words = [w.lower() for w in query.split() if len(w) > 1]
-
-        items = await _eval_listings(page, 'a[href*="/for-sale/"]')
-        for item in items:
-            raw_url = item.get("url", "")
-            # Normalise: strip query params, ensure base
-            if not raw_url:
-                continue
-            clean_url = raw_url.split("?")[0]
-            if clean_url in seen_urls:
-                continue
-            seen_urls.add(clean_url)
-            title = item.get("title", "")
-            if not title:
-                # Derive from slug
-                slug = clean_url.rstrip("/").split("/")[-1]
-                title = slug.replace("-", " ").title()
-            if not all(w in title.lower() for w in query_words):
-                continue
-            listings.append(Listing(
-                title=title, url=clean_url, source=source,
-                price=item.get("price", ""), time_left=item.get("timeLeft", ""),
-                image_url=item.get("imageUrl", ""),
-            ))
-
-        _log(f"[{source}] Done — {len(listings)} listings")
-
-    except PlaywrightTimeout:
-        _log(f"[{source}] Timed out", "warning")
-        raise
-    except Exception as e:
-        _log(f"[{source}] Error: {e}", "error")
-        raise
-
-    return listings
-
-
-# ─── duPont Registry ──────────────────────────────────────────────────────────
-
-async def scrape_dupont(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
-    source = "duPont Registry"
-    base   = "https://www.dupontregistry.com"
-    listings: list[Listing] = []
-    seen_ids: set[str] = set()
-
-    query_words = [w.lower() for w in query.split() if len(w) > 1]
-
-    def _ingest(autos: list[dict]):
-        for car in autos:
-            car_id = str(car.get("id", ""))
-            if not car_id or car_id in seen_ids:
-                continue
-            seen_ids.add(car_id)
-            year  = car.get("year", "")
-            brand = (car.get("carBrand") or {}).get("name", "")
-            model = (car.get("carModel") or {}).get("name", "")
-            trim  = car.get("trim") or ""
-            title = " ".join(str(p) for p in [year, brand, model, trim] if p).strip()
-            if not title:
-                continue
-            if not all(w in title.lower() for w in query_words):
-                continue
-            price_val = car.get("price")
-            price = f"${price_val:,.0f}" if price_val else ""
-            miles_val = car.get("mileage")
-            mileage = f"{int(miles_val):,} mi" if miles_val and int(miles_val) > 0 else ""
-            city  = car.get("city", "") or ""
-            state = car.get("state", "") or ""
-            location = f"{city}, {state}" if city and state else city or state
-            brand_alias = (car.get("carBrand") or {}).get("alias", "")
-            model_alias = (car.get("carModel") or {}).get("alias", "")
-            listing_url = f"{base}/autos/listing/{year}/{brand_alias}/{model_alias}/{car_id}"
-            photos = car.get("photos") or []
-            image_url = ""
-            if photos:
-                img_data = photos[0].get("image") or {}
-                image_url = img_data.get("width_480") or img_data.get("width_292") or ""
-            listings.append(Listing(
-                title=title, url=listing_url, source=source,
-                price=price, mileage=mileage, location=location, image_url=image_url,
-            ))
-
-    try:
-        for page_num in range(1, 6):  # up to 5 pages
-            url = f"{base}/autos/results?search_text={quote_plus(query)}&page={page_num}"
-            _log(f"[{source}] Fetching page {page_num}: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(1500)
-
-            if debug and page_num == 1:
-                _save_debug(await page.content(), "dupont")
-
-            nd_data = await page.evaluate("""() => {
-                const el = document.getElementById('__NEXT_DATA__');
-                if (!el) return null;
-                try { return JSON.parse(el.textContent); } catch(e) { return null; }
-            }""")
-            if not nd_data:
-                break
-            autos = (nd_data.get("props", {})
-                           .get("pageProps", {})
-                           .get("initialState", {})
-                           .get("autosState", {})
-                           .get("response", []))
-            before = len(listings)
-            _ingest(autos)
-            new = len(listings) - before
-            _log(f"[{source}] Page {page_num}: {len(autos)} items ({new} new)")
-            if not autos or len(autos) < 27:
-                break
-
-        _log(f"[{source}] Done — {len(listings)} listings")
-
-    except PlaywrightTimeout:
-        _log(f"[{source}] Timed out", "warning")
-        raise
-    except Exception as e:
-        _log(f"[{source}] Error: {e}", "error")
-        raise
-
-    return listings
