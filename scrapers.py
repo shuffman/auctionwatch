@@ -1385,6 +1385,9 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False, zip_code:
         if not api_headers:
             # Log what page we actually got — distinguishes bot-block from breakage
             title = await page.title()
+            if "just a moment" in title.lower():
+                # Cloudflare challenge page — never clears on hosting-provider IPs
+                raise RuntimeError("Blocked by Cloudflare challenge (hosting-provider IP)")
             snippet = (await page.evaluate("() => document.body.innerText.slice(0, 200)")) or ""
             _log(f"[{source}] API headers not captured — page: {title!r} | {snippet[:120]!r}", "warning")
             return listings
