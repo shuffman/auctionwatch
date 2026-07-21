@@ -1063,6 +1063,14 @@ async def scrape_carvana(page: Page, query: str, debug: bool = False, zip_code: 
     return listings
 
 
+_PF_HAS_LD = """() => {
+    for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+        try { if (JSON.parse(s.textContent)['@type'] === 'ItemList') return true; } catch(e) {}
+    }
+    return false;
+}"""
+
+
 async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
     source = "Porsche Finder"
     base = "https://finder.porsche.com/us/en-US"
@@ -1089,20 +1097,35 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
             url = f"{search_base}{page_sep}page={page_num}" if page_num > 1 else search_base
             _log(f"[{source}] Fetching page {page_num}: {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-            await page.wait_for_timeout(1500)
+
+            # PF hydrates client-side and rewrites its URL with a geo position param
+            # a few seconds after load. A fixed pause races that navigation: evaluate
+            # either runs before the JSON-LD exists (0 listings) or dies with
+            # "Execution context was destroyed". Wait for the ItemList itself, then
+            # retry the extract if the context is torn down mid-flight.
+            try:
+                await page.wait_for_function(_PF_HAS_LD, timeout=15000)
+            except Exception:
+                pass  # no ItemList — treated as last/empty page below
 
             if debug and page_num == 1:
                 _save_debug(await page.content(), "pf")
 
-            items = await page.evaluate("""() => {
-                for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
-                    try {
-                        const d = JSON.parse(s.textContent);
-                        if (d['@type'] === 'ItemList') return d.itemListElement || [];
-                    } catch(e) {}
-                }
-                return [];
-            }""")
+            items = []
+            for _ in range(3):
+                try:
+                    items = await page.evaluate("""() => {
+                        for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+                            try {
+                                const d = JSON.parse(s.textContent);
+                                if (d['@type'] === 'ItemList') return d.itemListElement || [];
+                            } catch(e) {}
+                        }
+                        return [];
+                    }""")
+                    break
+                except Exception:
+                    await page.wait_for_timeout(1000)
 
             if not items:
                 if debug:
