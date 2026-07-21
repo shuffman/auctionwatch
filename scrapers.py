@@ -1350,33 +1350,43 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False, zip_code:
 
     try:
         _log(f"[{source}] Loading search page")
-        await page.goto(f"{base}/classifieds/cars-for-sale", wait_until="domcontentloaded", timeout=30000)
 
-        # Capture auth headers from the first API call (triggered by typing)
+        # Capture auth headers from the site's own API traffic. The classifieds page
+        # calls /v2/search/listings on initial load, so registering the handler
+        # BEFORE goto usually captures headers with no interaction at all.
         api_headers: dict = {}
-        first_url: list[str] = []
 
         async def _on_request(req):
             if "api.hemmings.com/v2/search/listings" in req.url and not api_headers:
                 api_headers.update(req.headers)
-                first_url.append(req.url)
 
         page.on("request", _on_request)
 
-        # Wait for the input instead of a fixed pause — hydration takes longer on
-        # slow containers (Railway) and a one-shot query_selector raced it.
-        try:
-            search = await page.wait_for_selector('[placeholder="Keyword Search"]', timeout=20000)
-        except PlaywrightTimeout:
-            _log(f"[{source}] Search input not found", "warning")
-            return listings
-        await search.fill(query)
-        await search.press("Enter")
-        # Wait for the API call to fire and response to arrive
-        await page.wait_for_timeout(4000)
+        await page.goto(f"{base}/classifieds/cars-for-sale", wait_until="domcontentloaded", timeout=30000)
+
+        for _ in range(30):  # up to 15s for the initial-load API call
+            if api_headers:
+                break
+            await page.wait_for_timeout(500)
 
         if not api_headers:
-            _log(f"[{source}] API headers not captured", "warning")
+            # Fallback: trigger an API call by typing into the search box
+            try:
+                search = await page.wait_for_selector('[placeholder="Keyword Search"]', timeout=10000)
+                await search.fill(query)
+                await search.press("Enter")
+                for _ in range(20):  # up to 10s
+                    if api_headers:
+                        break
+                    await page.wait_for_timeout(500)
+            except PlaywrightTimeout:
+                pass
+
+        if not api_headers:
+            # Log what page we actually got — distinguishes bot-block from breakage
+            title = await page.title()
+            snippet = (await page.evaluate("() => document.body.innerText.slice(0, 200)")) or ""
+            _log(f"[{source}] API headers not captured — page: {title!r} | {snippet[:120]!r}", "warning")
             return listings
 
         if debug:
