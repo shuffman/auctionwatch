@@ -144,17 +144,17 @@ _WEB_HTML = r"""<!DOCTYPE html>
     /* ── Header: brand + search + auth ── */
     header {
       background: var(--bg2); border-bottom: 1px solid var(--border2);
-      padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.75rem 1.5rem; display: flex; align-items: flex-start; gap: 0.75rem;
     }
-    .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; display: flex; align-items: baseline; gap: 0.4rem; text-decoration: none; }
+    .brand { font-size: 1.05rem; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; display: flex; align-items: baseline; gap: 0.4rem; text-decoration: none; margin-top: 0.4rem; }
     .version { font-size: 0.65rem; font-weight: 400; color: var(--faint); font-family: monospace; }
     #theme-toggle {
       background: none; border: 1px solid var(--border); border-radius: 6px;
       color: var(--dim); cursor: pointer; font-size: .9rem; padding: .28rem .55rem;
-      line-height: 1; flex-shrink: 0;
+      line-height: 1; flex-shrink: 0; margin-top: 0.15rem;
     }
     #theme-toggle:hover { color: var(--text); border-color: var(--border3); }
-    .auth { margin-left: 0.25rem; font-size: .75rem; color: var(--dim); white-space: nowrap; text-decoration: none; }
+    .auth { margin-left: 0.25rem; margin-top: 0.55rem; font-size: .75rem; color: var(--dim); white-space: nowrap; text-decoration: none; }
     .auth a { color: var(--dim); text-decoration: none; }
     .auth a:hover, a.auth:hover { color: var(--text); }
     #sf { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-width: 0; }
