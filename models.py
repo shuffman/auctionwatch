@@ -31,9 +31,14 @@ class Listing:
 
     @property
     def short_id(self) -> str:
-        """4-char hex ID derived from SHA-256 of the URL path (no query params)."""
+        """8-char hex ID derived from SHA-256 of the URL path (no query params).
+
+        Was 4 chars before v1.7.19 — too few bits: a 200-listing result set had a
+        ~26% chance of a collision, which made stars/ignores bleed across listings.
+        Stored 4-char IDs are still honored as prefix matches for compatibility.
+        """
         path = urlparse(self.url).path.rstrip("/")
-        return hashlib.sha256(path.encode()).hexdigest()[:4]
+        return hashlib.sha256(path.encode()).hexdigest()[:8]
 
 
 SOURCE_COLORS_RICH = {
@@ -42,9 +47,12 @@ SOURCE_COLORS_RICH = {
     "Hagerty": "blue",
     "PCar Market": "magenta",
     "Craigslist": "orange1",
+    "Cars.com": "yellow",
     "Porsche Finder": "red",
     "CarMax": "red",
     "Carvana": "cyan",
+    "eBay Motors": "red",
+    "Hemmings": "red",
 }
 
 SOURCE_COLORS_HTML = {

@@ -67,7 +67,7 @@ In the web UI, the **Active only** toggle does the same thing instantly without 
 
 ## Listing IDs
 
-Every listing gets a stable 4-character hex ID derived from its URL (e.g. `a3f2`). IDs are consistent across searches and are shown in the terminal table and on each web card.
+Every listing gets a stable 8-character hex ID derived from its URL (e.g. `a3f2c91b`). IDs are consistent across searches and are shown in the terminal table and on each web card. (IDs saved before v1.7.19 were 4 characters; they are still recognized.)
 
 ### Ignoring listings
 

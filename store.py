@@ -50,6 +50,7 @@ def store_set_ignored(listing_id: str, ignored: bool):
         s.add(listing_id)
     else:
         s.discard(listing_id)
+        s.discard(listing_id[:4])  # legacy 4-char ID (pre-v1.7.19)
     data["ignored"] = sorted(s)
     _save_store(data)
 
@@ -65,6 +66,7 @@ def store_set_starred(listing_id: str, starred: bool):
         s.add(listing_id)
     else:
         s.discard(listing_id)
+        s.discard(listing_id[:4])  # legacy 4-char ID (pre-v1.7.19)
     data["starred"] = sorted(s)
     _save_store(data)
 
@@ -78,9 +80,11 @@ def store_get_starred() -> set[str]:
 def _get_secret_key() -> bytes:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     if SECRET_KEY_PATH.exists():
+        SECRET_KEY_PATH.chmod(0o600)
         return SECRET_KEY_PATH.read_bytes()
     key = secrets.token_bytes(32)
     SECRET_KEY_PATH.write_bytes(key)
+    SECRET_KEY_PATH.chmod(0o600)
     return key
 
 def _init_db():
@@ -114,16 +118,26 @@ def _init_db():
             );
         """)
 
-def _db_get_or_create_user(username: str) -> int:
-    """Return the user_id for username, creating the user if needed."""
+def _db_get_user(username: str):
+    """Return (id, password_hash) for username, or None if it doesn't exist."""
     username = username.strip()
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, '')",
-            (username,),
+        return conn.execute(
+            "SELECT id, password_hash FROM users WHERE username=?", (username,)
+        ).fetchone()
+
+def _db_create_user(username: str, password_hash: str) -> int:
+    username = username.strip()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?,?)",
+            (username, password_hash),
         )
-        row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
-    return row[0]
+        return cur.lastrowid
+
+def _db_set_password(user_id: int, password_hash: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE users SET password_hash=? WHERE id=?", (password_hash, user_id))
 
 def _db_get_ignored(user_id: int) -> set[str]:
     with sqlite3.connect(DB_PATH) as conn:
@@ -135,7 +149,9 @@ def _db_set_ignored(user_id: int, listing_id: str, ignored: bool):
         if ignored:
             conn.execute("INSERT OR IGNORE INTO ignored VALUES (?,?)", (user_id, listing_id))
         else:
-            conn.execute("DELETE FROM ignored WHERE user_id=? AND listing_id=?", (user_id, listing_id))
+            # Also clear any legacy 4-char ID (pre-v1.7.19) for this listing
+            conn.execute("DELETE FROM ignored WHERE user_id=? AND listing_id IN (?,?)",
+                         (user_id, listing_id, listing_id[:4]))
 
 def _db_get_starred(user_id: int) -> set[str]:
     with sqlite3.connect(DB_PATH) as conn:
@@ -147,7 +163,9 @@ def _db_set_starred(user_id: int, listing_id: str, starred: bool):
         if starred:
             conn.execute("INSERT OR IGNORE INTO starred VALUES (?,?)", (user_id, listing_id))
         else:
-            conn.execute("DELETE FROM starred WHERE user_id=? AND listing_id=?", (user_id, listing_id))
+            # Also clear any legacy 4-char ID (pre-v1.7.19) for this listing
+            conn.execute("DELETE FROM starred WHERE user_id=? AND listing_id IN (?,?)",
+                         (user_id, listing_id, listing_id[:4]))
 
 def _db_get_start(user_id: int) -> str:
     with sqlite3.connect(DB_PATH) as conn:

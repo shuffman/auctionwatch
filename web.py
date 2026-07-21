@@ -40,7 +40,7 @@ except ImportError:
 from models import SOURCE_COLORS_HTML
 from store import (
     _get_secret_key, _init_db,
-    _db_get_or_create_user,
+    _db_get_user, _db_create_user, _db_set_password,
     _db_get_ignored, _db_set_ignored,
     _db_get_starred, _db_set_starred,
     _db_get_start, _db_set_start,
@@ -64,7 +64,7 @@ _LOGIN_HTML = r"""<!DOCTYPE html>
     .brand { font-size: 1.2rem; font-weight: 700; color: #00bcd4; text-align: center; margin-bottom: 0.5rem; }
     .sub { font-size: .78rem; color: #555; text-align: center; margin-bottom: 1.75rem; }
     label { display: block; font-size: .78rem; color: #888; margin-bottom: .3rem; }
-    input[type=text] {
+    input[type=text], input[type=password] {
       width: 100%; background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
       padding: .5rem .75rem; color: #e0e0e0; font-size: .9rem; outline: none; margin-bottom: 1rem;
     }
@@ -83,11 +83,14 @@ _LOGIN_HTML = r"""<!DOCTYPE html>
 <body>
 <div class="box">
   <div class="brand">AuctionWatch</div>
-  <div class="sub">Sign in to save starred &amp; ignored listings</div>
+  <div class="sub">Sign in to save starred &amp; ignored listings.<br>
+       New usernames are registered on first sign-in.</div>
   <div class="error">{{error}}</div>
   <form method="post" action="/login">
     <label>Username</label>
     <input type="text" name="username" autocomplete="username" autofocus required>
+    <label>Password</label>
+    <input type="password" name="password" autocomplete="current-password" required>
     <button type="submit">Continue</button>
   </form>
   <a class="skip" href="/">Continue as guest</a>
@@ -134,7 +137,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
     }
     #recent-searches.open { display: block; }
     .rs-item {
-      padding: 0.45rem 0.75rem; font-size: 0.85rem; color: var(--text-dim); cursor: pointer;
+      padding: 0.45rem 0.75rem; font-size: 0.85rem; color: var(--dim); cursor: pointer;
       display: flex; align-items: center; gap: 0.5rem;
     }
     .rs-item:hover { background: #2a2a2a; color: var(--text); }
@@ -292,6 +295,7 @@ _WEB_HTML = r"""<!DOCTYPE html>
     .abtn.ign:hover { border-color: #c44; color: #e66; }
     .abtn.str.on { color: #e6c84a; border-color: #555; background: rgba(8,8,8,.82); text-shadow: 0 0 6px rgba(230,200,74,.8); }
     .abtn.str:not(.on):hover { border-color: #e6c84a; color: #e6c84a; }
+    .abtn.flag:hover { border-color: var(--accent); color: var(--accent); }
     .clink { display: block; text-decoration: none; color: inherit; }
     .cimg { height: 165px; overflow: hidden; background: #111; }
     .cimg img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s; }
@@ -418,6 +422,17 @@ let st = { bysite:{}, siteData:{}, serverStart:'', lastQ:'', lastT:'', starred:n
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
+// Membership check that also matches legacy 4-char IDs stored before v1.7.19
+function inSet(s,id){ return s.has(id) || s.has(id.slice(0,4)) }
+
+let guestNotified=false;
+function notifyGuest(){
+  if(guestNotified) return;
+  guestNotified=true;
+  const bar=document.getElementById('statusbar');
+  bar.innerHTML += ' <span style="color:var(--yellow)">— not saved: sign in to keep stars &amp; ignores</span>';
+}
+
 function activeSites(){ return [...document.querySelectorAll('#spills .pill.on')].map(p=>p.dataset.site) }
 
 const AUCTION_SITES    = new Set(['cab','bat','hagerty','pcar','ebay']);
@@ -443,16 +458,16 @@ document.getElementById('preset-all').addEventListener('click',     () => applyP
 function tlMinutes(tl){
   const t=(tl||'').trim();
   if(!t||/ended|sold|closed/i.test(t)) return Infinity;
-  let m=0;
-  const d=t.match(/(\d+)\s*D/i); if(d) m+=parseInt(d[1])*1440;
-  const h=t.match(/(\d+)\s*H/i); if(h) m+=parseInt(h[1])*60;
-  const mn=t.match(/(\d+)\s*M/i); if(mn) m+=parseInt(mn[1]);
-  if(!m){
-    // HH:MM:SS format (C&B, BaT)
-    const ts=t.match(/(\d+):(\d{2}):\d{2}/);
-    if(ts) m=parseInt(ts[1])*60+parseInt(ts[2]);
+  let m=0, matched=false;
+  const d=t.match(/(\d+)\s*D/i); if(d){ m+=parseInt(d[1])*1440; matched=true; }
+  const h=t.match(/(\d+)\s*H/i); if(h){ m+=parseInt(h[1])*60; matched=true; }
+  const mn=t.match(/(\d+)\s*M/i); if(mn){ m+=parseInt(mn[1]); matched=true; }
+  if(!matched){
+    // HH:MM:SS format (C&B, BaT) — keep seconds so 0:00:45 sorts first, not as ended
+    const ts=t.match(/(\d+):(\d{2}):(\d{2})/);
+    if(ts){ m=parseInt(ts[1])*60+parseInt(ts[2])+parseInt(ts[3])/60; matched=true; }
   }
-  return m||Infinity;
+  return matched ? m : Infinity;
 }
 
 function isCarsOnly()    { return !!document.querySelector('[data-filter="cars"].on');    }
@@ -550,9 +565,9 @@ function allListings(){
   if(onSites.size > 0) all = all.filter(l => onSites.has(siteKey[l.source]||''));
   if(carsOnly)    all = all.filter(l => YEAR_RE.test(l.title));
   if(activeOnly)  all = all.filter(l => { const t=l.time_left||''; if(!t) return true; return /\d/.test(t) && !/ended|sold|closed/i.test(t); });
-  if(ignoredOnly) all = all.filter(l =>  st.ignored.has(l.short_id));
-  else            all = all.filter(l => !st.ignored.has(l.short_id));
-  if(starredOnly) all = all.filter(l => st.starred.has(l.short_id));
+  if(ignoredOnly) all = all.filter(l =>  inSet(st.ignored, l.short_id));
+  else            all = all.filter(l => !inSet(st.ignored, l.short_id));
+  if(starredOnly) all = all.filter(l => inSet(st.starred, l.short_id));
   // Year filter
   const yloV = document.getElementById('year-lo').value;
   const yhiV = document.getElementById('year-hi').value;
@@ -593,7 +608,8 @@ function allListings(){
 
 function startIdx(listings){
   if(!st.serverStart) return null;
-  const i = listings.findIndex(l=>l.short_id===st.serverStart);
+  const s = st.serverStart;
+  const i = listings.findIndex(l=>l.short_id===s || l.short_id.slice(0,4)===s);
   return i>=0 ? i : null;
 }
 
@@ -605,14 +621,15 @@ function tlHtml(l){
 
 function cardHtml(l, seen){
   const c=SC[l.source]||'#888';
-  const starred = st.starred.has(l.short_id);
-  const ignored = st.ignored.has(l.short_id);
+  const starred = inSet(st.starred, l.short_id);
+  const ignored = inSet(st.ignored, l.short_id);
   const img=l.image_url
     ? `<img src="${esc(l.image_url)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=noimg>No image</div>'">`
     : '<div class="noimg">No image</div>';
   return `<div class="card${seen?' seen':''}${starred?' starred':''}${ignored?' is-ignored':''}" data-id="${l.short_id}">
   <div class="cactions">
     <button class="abtn ign" onclick="toggleIgnore('${l.short_id}',event)" title="${ignored?'Unignore':'Ignore'}">✕</button>
+    <button class="abtn flag" onclick="setStart('${l.short_id}',event)" title="Mark start — this and everything below become seen">⚑</button>
     <button class="abtn str${starred?' on':''}" onclick="starCard('${l.short_id}',event)" title="Star">★</button>
   </div>
   <a class="clink" href="${esc(l.url)}" target="_blank" rel="noopener">
@@ -821,8 +838,9 @@ function doSearch(e, keepTags=false){
 
 async function toggleIgnore(id, e){
   e.preventDefault(); e.stopPropagation();
-  const nowIgnored = !st.ignored.has(id);
-  if(nowIgnored) st.ignored.add(id); else st.ignored.delete(id);
+  const nowIgnored = !inSet(st.ignored, id);
+  if(nowIgnored) st.ignored.add(id);
+  else { st.ignored.delete(id); st.ignored.delete(id.slice(0,4)); }
   // Card disappears from current view if it no longer matches the filter
   const willDisappear = isIgnoredOnly() ? !nowIgnored : nowIgnored;
   const card = document.querySelector(`.card[data-id="${id}"]`);
@@ -832,27 +850,34 @@ async function toggleIgnore(id, e){
   } else {
     render();
   }
-  await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,ignored:nowIgnored})});
+  const r = await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,ignored:nowIgnored})});
+  const d = await r.json().catch(()=>({saved:true}));
+  if(!d.saved) notifyGuest();
 }
 
 async function setStart(id, e){
   e.preventDefault(); e.stopPropagation();
   st.serverStart=id;
-  await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  const r = await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  const d = await r.json().catch(()=>({saved:true}));
   render();
+  if(!d.saved) notifyGuest();
 }
 
 async function starCard(id, e){
   e.preventDefault(); e.stopPropagation();
-  const nowStarred = !st.starred.has(id);
-  if(nowStarred) st.starred.add(id); else st.starred.delete(id);
+  const nowStarred = !inSet(st.starred, id);
+  if(nowStarred) st.starred.add(id);
+  else { st.starred.delete(id); st.starred.delete(id.slice(0,4)); }
   const card=document.querySelector(`.card[data-id="${id}"]`);
   if(card){
     card.classList.toggle('starred', nowStarred);
     const btn=card.querySelector('.abtn.str');
     if(btn) btn.classList.toggle('on', nowStarred);
   }
-  await fetch('/api/star',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,starred:nowStarred})});
+  const r = await fetch('/api/star',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,starred:nowStarred})});
+  const d = await r.json().catch(()=>({saved:true}));
+  if(!d.saved) notifyGuest();
 }
 
 document.getElementById('sf').addEventListener('submit', doSearch);
@@ -860,7 +885,6 @@ document.getElementById('sf').addEventListener('submit', doSearch);
 // Site pills: simple on/off toggle
 document.querySelectorAll('#spills .pill').forEach(p=>p.addEventListener('click',()=>{
   p.classList.toggle('on');
-  p.textContent = p.dataset.label;
   render();
 }));
 
@@ -924,6 +948,13 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
             print("  [ERROR] flask not installed — run: pip install flask", file=sys.stderr)
         sys.exit(1)
 
+    from werkzeug.security import generate_password_hash as _gen_hash, check_password_hash
+
+    def generate_password_hash(pw: str) -> str:
+        # pbkdf2 instead of werkzeug's scrypt default: Python 3.9 builds may lack
+        # hashlib.scrypt (OpenSSL compiled without it)
+        return _gen_hash(pw, method="pbkdf2:sha256")
+
     from auctionwatch import ALL_SITES, _listing_json
 
     app = Flask(__name__)
@@ -941,9 +972,22 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
         from flask import request as freq2, session as fsession, redirect
         if freq2.method == "POST":
             username = freq2.form.get("username", "").strip()
+            password = freq2.form.get("password", "")
             if not username:
                 return _LOGIN_HTML.replace("{{error}}", "Please enter a username")
-            uid = _db_get_or_create_user(username)
+            if not password:
+                return _LOGIN_HTML.replace("{{error}}", "Please enter a password")
+            row = _db_get_user(username)
+            if row is None:
+                uid = _db_create_user(username, generate_password_hash(password))
+            elif not row[1]:
+                # Account created before passwords existed — first login claims it
+                uid = row[0]
+                _db_set_password(uid, generate_password_hash(password))
+            elif not check_password_hash(row[1], password):
+                return _LOGIN_HTML.replace("{{error}}", "Incorrect password")
+            else:
+                uid = row[0]
             fsession["user_id"] = uid
             fsession["username"] = username
             return redirect("/")
@@ -981,7 +1025,10 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
         sites    = freq.args.getlist("sites") or list(ALL_SITES.keys())
         act_only = freq.args.get("active") == "1"
         zip_code = freq.args.get("zip", "").strip()
-        radius   = int(freq.args.get("radius", "0") or "0")
+        try:
+            radius = int(freq.args.get("radius", "0") or "0")
+        except ValueError:
+            radius = 0
 
         if not q:
             return jsonify({"error": "no query"}), 400
@@ -1098,7 +1145,7 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
         ignored = (freq.json or {}).get("ignored", True)
         if uid and lid:
             _db_set_ignored(uid, lid, ignored)
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "saved": bool(uid and lid)})
 
     @app.route("/api/start", methods=["POST"])
     def api_start():
@@ -1106,7 +1153,7 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
         lid = (freq.json or {}).get("id", "")
         if uid and lid:
             _db_set_start(uid, lid)
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "saved": bool(uid and lid)})
 
     @app.route("/api/star", methods=["POST"])
     def api_star():
@@ -1115,7 +1162,7 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
         starred = (freq.json or {}).get("starred", True)
         if uid and lid:
             _db_set_starred(uid, lid, starred)
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "saved": bool(uid and lid)})
 
     @app.route("/api/store")
     def api_store():

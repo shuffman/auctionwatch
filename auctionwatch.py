@@ -74,18 +74,21 @@ def _time_left_minutes(time_left: str) -> float:
     t = (time_left or "").strip()
     if not t or re.search(r'ended|sold|closed', t, re.I):
         return float("inf")
-    total = 0
+    total = 0.0
+    matched = False
     m = re.search(r'(\d+)\s*D', t, re.I)
-    if m: total += int(m.group(1)) * 1440
+    if m: total += int(m.group(1)) * 1440; matched = True
     m = re.search(r'(\d+)\s*H', t, re.I)
-    if m: total += int(m.group(1)) * 60
+    if m: total += int(m.group(1)) * 60; matched = True
     m = re.search(r'(\d+)\s*M', t, re.I)
-    if m: total += int(m.group(1))
-    if not total:
-        # HH:MM:SS format (C&B, BaT)
-        m = re.search(r'(\d+):(\d{2}):\d{2}', t)
-        if m: total = int(m.group(1)) * 60 + int(m.group(2))
-    return total if total > 0 else float("inf")
+    if m: total += int(m.group(1)); matched = True
+    if not matched:
+        # HH:MM:SS format (C&B, BaT) — keep seconds so 0:00:45 sorts first, not as ended
+        m = re.search(r'(\d+):(\d{2}):(\d{2})', t)
+        if m:
+            total = int(m.group(1)) * 60 + int(m.group(2)) + int(m.group(3)) / 60
+            matched = True
+    return total if matched else float("inf")
 
 
 def _esc(s: str) -> str:
@@ -155,8 +158,9 @@ def display_terminal(listings: list[Listing], query: str, start_id: str = ""):
             print(f"\n{msg}")
         return
 
-    # Find position of start marker (everything at/after this index is "seen")
-    start_idx = next((i for i, l in enumerate(listings) if l.short_id == start_id), None) if start_id else None
+    # Find position of start marker (everything at/after this index is "seen").
+    # startswith() also matches legacy 4-char IDs stored before v1.7.19.
+    start_idx = next((i for i, l in enumerate(listings) if l.short_id.startswith(start_id)), None) if start_id else None
 
     new_count = start_idx if start_idx is not None else len(listings)
 
@@ -511,9 +515,10 @@ async def run(
     elif only_inactive:
         listings = [l for l in listings if l.is_active is False]
 
-    # Filter ignored listings
+    # Filter ignored listings (also match legacy 4-char IDs stored before v1.7.19)
     if ignored:
-        listings = [l for l in listings if l.short_id not in ignored]
+        listings = [l for l in listings
+                    if l.short_id not in ignored and l.short_id[:4] not in ignored]
 
     # Sort by time remaining (active first, ended last)
     listings.sort(key=lambda l: _time_left_minutes(l.time_left))
@@ -523,7 +528,7 @@ async def run(
 
     # JSON output
     if output_json:
-        print(json.dumps([asdict(l) for l in listings], indent=2))
+        print(json.dumps([_listing_json(l) for l in listings], indent=2))
 
     # HTML output
     if output_html:
@@ -575,7 +580,7 @@ examples:
                         help="Search radius in miles from --zip (default: site default)")
     parser.add_argument(
         "--ignore", metavar="ID",
-        help="Permanently hide listing with this 4-char ID from future results"
+        help="Permanently hide listing with this ID from future results"
     )
     parser.add_argument(
         "--start", metavar="ID",
@@ -616,12 +621,6 @@ examples:
                             help="Search eBay Motors")
     site_group.add_argument("--hemmings",    dest="sites", action="append_const", const="hemmings",
                             help="Search Hemmings")
-    site_group.add_argument("--classiccars", dest="sites", action="append_const", const="classiccars",
-                            help="Search ClassicCars.com")
-    site_group.add_argument("--collecting",  dest="sites", action="append_const", const="collecting",
-                            help="Search Collecting Cars")
-    site_group.add_argument("--dupont",      dest="sites", action="append_const", const="dupont",
-                            help="Search duPont Registry")
 
     args = parser.parse_args()
 

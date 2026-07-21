@@ -90,6 +90,20 @@ def _abs_url(href: str, base: str) -> str:
     return base.rstrip("/") + "/" + href.lstrip("/")
 
 
+def _num(val) -> "float | None":
+    """Coerce a scraped price/mileage value (int, float, or string) to a float.
+
+    JSON-LD sites sometimes return numbers as strings ("56900.00", "22,412");
+    formatting those with :,.0f would raise and kill the whole scraper.
+    """
+    if val is None or val == "":
+        return None
+    try:
+        return float(str(val).replace("$", "").replace(",", "").strip())
+    except ValueError:
+        return None
+
+
 # Porsche model keyword → URL key for finder.porsche.com
 _PF_MODELS: list[tuple[str, str]] = [
     ("cayenne", "cayenne"),
@@ -298,8 +312,9 @@ async def scrape_carsandbids(page: Page, query: str, debug: bool = False, zip_co
         if debug:
             _save_debug(await page.content(), "carsandbids")
 
-        # Click "Load More" until exhausted, scrolling between clicks to trigger lazy loads
-        while True:
+        # Click "Load More" until exhausted, scrolling between clicks to trigger lazy
+        # loads. Capped so a sticky button that stops loading content can't hang forever.
+        for _ in range(20):
             await _scroll_to_bottom(page)
             btn = await page.query_selector('button:has-text("Load More"), button:has-text("Show More"), a:has-text("Load More")')
             if not btn:
@@ -648,7 +663,9 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False, zip_cod
     source = "Craigslist"
     listings = []
     seen_pids: set[str] = set()
-    seen_titles: set[str] = set()
+    # Cross-posted cars share title AND price across metros; keying on both keeps
+    # duplicate suppression without dropping distinct cars that share a title.
+    seen_titles: set[tuple[str, str]] = set()
 
     # Each metro gets its own page and pid_to_img dict.
     # _on_response is a factory that closes over the per-metro dict.
@@ -693,7 +710,7 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False, zip_cod
                 title = item.get("title", "").strip()
                 if not title:
                     continue
-                title_key = title.lower()
+                title_key = (title.lower(), item.get("price", ""))
                 if title_key in seen_titles:
                     continue
                 item_url = item.get("url", "")
@@ -859,9 +876,9 @@ def _carmax_listing(car: dict, base: str, source: str) -> "Listing | None":
     title = " ".join(str(p) for p in [year, make, model, trim] if p).strip()
     if not title:
         return None
-    price_val = car.get("basePrice")
+    price_val = _num(car.get("basePrice"))
     price     = f"${price_val:,.0f}" if price_val else ""
-    miles_val = car.get("mileage")
+    miles_val = _num(car.get("mileage"))
     mileage   = f"{int(miles_val):,} mi" if miles_val else ""
     city      = car.get("storeCity", "")
     state     = car.get("stateAbbreviation", "")
@@ -1023,11 +1040,11 @@ async def scrape_carvana(page: Page, query: str, debug: bool = False, zip_code: 
                 name   = item.get("name") or ""
                 config = item.get("vehicleConfiguration") or ""
                 title  = name or f"{year} {config}".strip()
-                price_val = offers.get("price")
+                price_val = _num(offers.get("price"))
                 price  = f"${price_val:,.0f}" if price_val else ""
                 mileage_raw = item.get("mileageFromOdometer")
-                miles_val = mileage_raw.get("value") if isinstance(mileage_raw, dict) else mileage_raw
-                mileage = f"{int(miles_val):,} mi" if miles_val and int(miles_val) > 0 else ""
+                miles_val = _num(mileage_raw.get("value") if isinstance(mileage_raw, dict) else mileage_raw)
+                mileage = f"{int(miles_val):,} mi" if miles_val and miles_val > 0 else ""
                 listings.append(Listing(
                     title=title, url=item_url, source=source,
                     price=price, mileage=mileage,
@@ -1065,10 +1082,11 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
                     if len(w) > 2 and w not in ('porsche', 'the', 'and', 'for')]
 
     search_base = f"{base}/search/{model_key}?model={model_key}" if model_key else f"{base}/search"
+    page_sep = "&" if "?" in search_base else "?"
 
     try:
         for page_num in range(1, 6):  # max 5 pages = 75 results
-            url = f"{search_base}&page={page_num}" if page_num > 1 else search_base
+            url = f"{search_base}{page_sep}page={page_num}" if page_num > 1 else search_base
             _log(f"[{source}] Fetching page {page_num}: {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=25000)
             await page.wait_for_timeout(1500)
@@ -1101,7 +1119,7 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
                     continue
                 seen_urls.add(clean_url)
 
-                year   = (item.get("modelDate") or item.get("vehicleModelDate") or "")[:4]
+                year   = str(item.get("modelDate") or item.get("vehicleModelDate") or "")[:4]
                 config = item.get("vehicleConfiguration") or item.get("name") or ""
                 title  = f"{year} Porsche {config}".strip()
 
@@ -1111,11 +1129,12 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
                     if not all(w in tl for w in filter_words):
                         continue
 
-                price_val = offers.get("price")
+                price_val = _num(offers.get("price"))
                 price     = f"${price_val:,.0f}" if price_val else ""
 
-                miles_val = (item.get("mileageFromOdometer") or {}).get("value")
-                mileage   = f"{int(miles_val):,} mi" if miles_val and int(miles_val) > 0 else ""
+                miles_raw = item.get("mileageFromOdometer")
+                miles_val = _num(miles_raw.get("value") if isinstance(miles_raw, dict) else miles_raw)
+                mileage   = f"{int(miles_val):,} mi" if miles_val and miles_val > 0 else ""
 
                 address  = (offers.get("seller") or {}).get("address") or {}
                 location = address.get("addressLocality", "")
