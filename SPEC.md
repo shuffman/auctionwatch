@@ -6,9 +6,11 @@
 
 ## Overview
 
-AuctionWatch is a Python/Flask web app that aggregates used car listings from six sources in real time. The user enters a search query; results stream in from all sites simultaneously and are displayed in a filterable, sortable card grid.
+AuctionWatch is a Python/Flask web app that aggregates used car listings from eleven sources in real time. The user enters a search query; results stream in from all sites simultaneously and are displayed in a filterable, sortable card grid with a day/night theme (day default).
 
-**Stack:** Python 3.11+, Flask, Playwright (Chromium), asyncio, SQLite, vanilla JS + CSS
+**Sources:** Cars & Bids, Bring a Trailer, Hagerty, PCar Market, Craigslist, Cars.com, Porsche Finder, CarMax, Carvana, eBay Motors, Hemmings
+
+**Stack:** Python 3.9+, Flask, Playwright (Chromium), asyncio, SQLite, vanilla JS + CSS
 
 ---
 
@@ -17,10 +19,10 @@ AuctionWatch is a Python/Flask web app that aggregates used car listings from si
 ```
 auctionwatch.py   CLI entry point and scraping orchestrator
 web.py            Flask server + full single-page UI (HTML/CSS/JS inlined)
-scrapers.py       All six Playwright-based scrapers + JS extractor
-models.py         Listing dataclass
+scrapers.py       All eleven Playwright-based scrapers + JS extractor
+models.py         Listing dataclass + source color maps
 store.py          JSON (local) and SQLite (web) persistence
-version.py        __version__ = "v1.7.3"
+version.py        __version__ = "vX.Y.Z" — bumped every release, shown in the UI header
 ```
 
 ---
@@ -32,19 +34,21 @@ version.py        __version__ = "v1.7.3"
 class Listing:
     title: str          # "2014 Porsche 911 Carrera S"
     url: str            # canonical listing URL
-    source: str         # "Cars & Bids" | "Bring a Trailer" | "Hagerty" |
-                        # "PCar Market" | "Craigslist" | "Cars.com"
+    source: str         # "Cars & Bids" | "Bring a Trailer" | "Hagerty" | "PCar Market" |
+                        # "Craigslist" | "Cars.com" | "Porsche Finder" | "CarMax" |
+                        # "Carvana" | "eBay Motors" | "Hemmings"
     price: str = ""     # "$42,500" or ""
-    mileage: str = ""   # "23,456 miles" (Cars.com only)
+    mileage: str = ""   # "23,456 mi" (Cars.com, PF, CarMax, Carvana)
     location: str = ""  # "Portland, OR"
     status: str = ""    # unused
-    time_left: str = "" # "2:14:33" | "3 days" | "1D 11H 18M" | "Ended" | ""
+    time_left: str = "" # "2:14:33" | "3 days" | "1D 11H 18M" | "2D 6H" | "Ended" | ""
     image_url: str = ""
     bid_count: str = "" # unused
 
     @property
     def short_id(self) -> str:
-        """First 4 hex chars of SHA-256(url_path). Stable cross-session."""
+        """First 8 hex chars of SHA-256(url_path). Stable cross-session.
+        4 chars before v1.7.19; stored 4-char IDs still match as prefixes."""
 
     @property
     def is_active(self) -> bool | None:
@@ -59,13 +63,18 @@ Hagerty       → #2196f3  (blue)
 PCar Market   → #9c27b0  (magenta)
 Craigslist    → #ff9800  (orange)
 Cars.com      → #e91e63  (pink)
+Porsche Finder → #d5001c (Porsche red)
+CarMax        → #c9201f  (red)
+Carvana       → #00a78e  (teal)
+eBay Motors   → #e43137  (red)
+Hemmings      → #b22222  (firebrick)
 ```
 
 ---
 
 ## Scrapers
 
-All scrapers share a Playwright page object and return `list[Listing]`. They use the shared `_JS_EXTRACT` JavaScript extractor except Cars.com (has its own `_CARS_COM_JS`) and PCar Market (reads a JSON blob).
+All scrapers share the signature `scrape_x(page, query, debug, zip_code="", radius=0) -> list[Listing]`. Cars & Bids and Bring a Trailer use the shared `_JS_EXTRACT` extractor; Hagerty, Cars.com, Craigslist, eBay, and CarMax have site-specific JS extractors; PCar Market, Porsche Finder, Carvana, and Hemmings read embedded JSON / internal APIs. `_num()` coerces string prices/mileage (`"56,900.00"`) before numeric formatting so one malformed listing can't kill a scraper.
 
 ### Universal JS Extractor (`_JS_EXTRACT`)
 
@@ -140,8 +149,9 @@ Learn, Contact, Make Offer, Ends In, High Bid, Sold For, Starting Bid
 
 ### Hagerty
 
-- **URL:** `https://www.hagerty.com/marketplace/search?searchQuery={query}&type=classifieds`
-- **Selector:** `a[href*="/marketplace/auction/"]`
+- **URL:** `https://www.hagerty.com/marketplace/search?searchQuery={query}&sortBy=recommended`
+- **Selector:** `a[href*="/marketplace/auction/"], a[href*="/marketplace/classified/"], a[href*="/marketplace/listings/"]`
+- **Custom extractor `_HAGERTY_JS`** (not `_JS_EXTRACT`): walks up to the card boundary, prefers `h4/h3/h2/strong` titles, prepends year from card text when missing, and parses card text for time state: `"5 days Bid…"` → `5D`, `"Sold for…"` → `Sold`, `"Bid to…"` → `Ended`, `"Asking price…"` → classified (empty time)
 - **Wait:** `domcontentloaded` + scroll to bottom
 - **Post-filter:** Drop entries matching `/why hagerty|hagerty marketplace\?/i`
 
@@ -173,9 +183,9 @@ Learn, Contact, Make Offer, Ends In, High Bid, Sold For, Starting Bid
 | Seattle | seattle |
 | Spokane | spokane |
 | Bellingham | bellingham |
-| Olympia | olympia |
+| Olympic Peninsula | olympic |
 | Yakima | yakima |
-| Tri-Cities | tricities |
+| Tri-Cities | kpr |
 | Wenatchee | wenatchee |
 | Portland | portland |
 | Eugene | eugene |
@@ -189,12 +199,14 @@ Learn, Contact, Make Offer, Ends In, High Bid, Sold For, Starting Bid
 | Phoenix | phoenix |
 | Salt Lake City | saltlake |
 
+Gotchas encoded in the list: `olympia.craigslist.org` does not exist (Olympia proper is a Seattle-site subarea), and `tricities.craigslist.org` is Tri-Cities **Tennessee** — Washington's is `kpr` (Kennewick-Pasco-Richland).
+
 - **Browser:** Separate Playwright browser instance from auction sites (prevents viewport/I/O starvation)
 - **Per-metro:** Fresh page per metro (avoids session-based rate limiting)
 - **Viewport:** 1280×20000 before navigation (forces IntersectionObserver to load all ~160 results)
 - **Image capture:** Intercept `response` events for `images.craigslist.org/d/{pid}/...` → build `pid → image_url` map
 - **Selector:** `.cl-search-result` → `a.posting-title`
-- **Dedup:** First by PID, then case-insensitive title. Filter out `vancouver.craigslist.org` URLs.
+- **Dedup:** First by PID, then by case-insensitive (title, price) pair — same car cross-posted to several metros shares both; distinct cars sharing a title usually differ in price. Filter out `vancouver.craigslist.org` URLs.
 
 ---
 
@@ -208,6 +220,54 @@ Learn, Contact, Make Offer, Ends In, High Bid, Sold For, Starting Bid
   - Mileage from `.datum-icon.mileage`
   - Location from `.datum-icon` not matching mileage/price-drop/review-star classes
 - **Stops** when a page returns 0 new (deduplicated by URL) listings
+- **Location:** `&zip={zip}&maximum_distance={radius|all}` when a ZIP is given
+
+---
+
+### Porsche Finder
+
+- **URL:** `https://finder.porsche.com/us/en-US/search/{model}?model={model}` when a model keyword (911, cayman, taycan, …) is detected in the query via `_PF_MODELS`; plain `/search` otherwise. Pagination appends `page={n}` with `&` or `?` as appropriate; 5 pages max, stop early when a page has <15 items.
+- **Strategy:** JSON-LD — first `<script type="application/ld+json">` with `@type: ItemList`
+- **Critical wait:** the site hydrates client-side and rewrites its URL with a geo `position` param a few seconds after load. `wait_for_function` polls for the ItemList JSON-LD (15s), and the extract retries up to 3× if the JS context is destroyed by that navigation. A fixed pause loses this race on slow containers.
+- **Client filter:** all significant query words (minus "porsche"/stopwords) must appear in the title
+- **Title:** `"{modelDate} Porsche {vehicleConfiguration|name}"`
+
+---
+
+### CarMax
+
+- **URL:** `https://www.carmax.com/cars?search={query}` (+ `&zip=` when given)
+- **Page 1:** `_CARMAX_JS` regex-extracts `const cars = [...]`, `totalCount`, `zipCode`, `requestedUrl` from inline scripts
+- **Pages 2+:** internal API `GET /cars/api/search/run?uri=…&skip=N&take=24&zipCode=…&visitorID={uuid4}` via in-page `fetch` (credentials included); up to 5 pages total
+- **Client filter:** every query word must appear in the built title (`year make model trim`)
+- **Dedup:** by `stockNumber`; listing URL is `/car/{stockNumber}`
+
+---
+
+### Carvana
+
+- **URL:** `https://www.carvana.com/cars?search={query}`
+- **Cloudflare:** waits up to 10s for the Turnstile challenge to clear; if the title still says "Just a moment", **raises** `Blocked by Cloudflare challenge (hosting-provider IP)` so the UI shows an error pill. This always happens on datacenter IPs (e.g. Railway); works on residential IPs.
+- **Strategy:** JSON-LD (`Car`/`Vehicle`/`ItemList` entries); `_JS_EXTRACT` on `a[href*="/vehicle/"]` as fallback
+- **Price/mileage:** from `offers.price` / `mileageFromOdometer` (dict or scalar), coerced with `_num()`
+
+---
+
+### eBay Motors
+
+- **URL:** `https://www.ebay.com/sch/i.html?_nkw={query}&_sacat=6001&_sop=12&_pgn={n}` (+ `&_stpos={zip}&_sadis={radius}`), 3 pages max
+- **Custom extractor `_EBAY_JS`:** `li.s-card` cards; skips "Shop on eBay" placeholders
+- **time_left:** `"2d 6h left"` → `"2D 6H"`; empty for fixed-price listings
+- **Client filter:** every query word must appear in the title
+
+---
+
+### Hemmings
+
+- **URL flow:** load `https://www.hemmings.com/classifieds/cars-for-sale`, sniff auth headers (`hemmings-secret`, `x-csrf-token`) from the page's own call to `api.hemmings.com/v2/search/listings`. The request handler is registered **before** `goto` — the page calls the API on initial load, no interaction needed. Typing into the "Keyword Search" box is the fallback.
+- **Then:** direct API pagination via in-page `fetch`: `?adtype=cars-for-sale&q={query}&per_page=30&page={n}`, 5 pages max
+- **Cloudflare:** raises `Blocked by Cloudflare challenge (hosting-provider IP)` when the page title is "Just a moment..." (hosting IPs)
+- **time_left:** derived from `end_date` ISO timestamp (`_hemmings_time_left`); statuses sold/ended/expired → "Ended"
 
 ---
 
@@ -218,22 +278,31 @@ Learn, Contact, Make Offer, Ends In, High Bid, Sold For, Starting Bid
 | Route | Method | Description |
 |---|---|---|
 | `/` | GET | Serve SPA (HTML/CSS/JS all inline) |
-| `/login` | GET/POST | Login form + auth |
+| `/login` | GET/POST | Username + password form; registers new usernames on first sign-in |
+| `/logout` | GET | Clear session |
 | `/api/search/stream` | GET | SSE stream of scraper results |
 | `/api/ignore` | POST | Toggle ignore on a listing short_id |
 | `/api/star` | POST | Toggle star on a listing short_id |
 | `/api/start` | POST | Set "seen below" start marker |
 | `/api/store` | GET | Return starred, ignored, start_id |
-| `/api/searches` | GET | Return recent search history |
+| `/api/searches` | GET | Return recent search history (10 most recent) |
+
+### Auth
+
+- Passwords hashed with werkzeug `pbkdf2:sha256` (not scrypt — Python 3.9 builds may lack `hashlib.scrypt`)
+- New username → account created; existing account with empty `password_hash` (pre-password era) → claimed by first successful login; otherwise `check_password_hash` must pass
+- Session cookie signed with a 32-byte key persisted at `$DATA_DIR/.auctionwatch.secret`, chmod 600
+- The signed-in username is HTML-escaped before interpolation into the header
+- The three write endpoints return `{"ok": true, "saved": bool}` — `saved: false` for guests (nothing persisted); the client shows a one-time "sign in to keep stars & ignores" notice
 
 ### SSE Streaming (`/api/search/stream`)
 
-Query params: `q` (query), `sites` (comma-separated: `cab,bat,hagerty,pcar,cl,carscom`)
+Query params: `q` (query), `sites` (repeated: `sites=cab&sites=bat&…`; keys: `cab,bat,hagerty,pcar,pf,cl,carscom,carmax,carvana,ebay,hemmings`), `active=1` (server-side active-only filter), `zip`, `radius` (non-numeric radius falls back to 0)
 
 1. Create `queue.Queue`
 2. Spawn daemon thread with new asyncio event loop
-3. Run `_scrape_all(query, sites, queue)`:
-   - Auction scrapers share one Playwright browser (6 pages)
+3. Run the scrape coroutine:
+   - Non-Craigslist scrapers share one Playwright browser (one page each)
    - Craigslist uses a separate Playwright browser
    - All scrapers run concurrently via `asyncio.gather`
    - Each result pushed to queue: `{"site": key, "listings": [...], "stats": {...}}`
@@ -249,26 +318,32 @@ Query params: `q` (query), `sites` (comma-separated: `cab,bat,hagerty,pcar,cl,ca
 **Local mode** (CLI): `~/.auctionwatch.json`
 ```json
 {
-  "ignored": ["ab12", "cd34"],
-  "starred": ["ef56"],
-  "start_id": "gh78"
+  "ignored": ["ab12cd34", "cd34ef56"],
+  "starred": ["ef56ab12"],
+  "start": "gh78cd12"
 }
 ```
 
-**Web mode** (Flask + SQLite): DB at `$DATA_DIR/auctionwatch.db` or `~/.auctionwatch.db`
+**Web mode** (Flask + SQLite): DB at `$DATA_DIR/.auctionwatch.db` (DATA_DIR defaults to `~`)
 
 Tables:
-- `users(id, username, password_hash)`
-- `ignored(user_id, short_id)`
-- `starred(user_id, short_id)`
-- `start_id(user_id, short_id)` (single row per user)
-- `searches(user_id, query, ts)` — recent search history
+- `users(id, username UNIQUE COLLATE NOCASE, password_hash)`
+- `ignored(user_id, listing_id)` — PK (user_id, listing_id)
+- `starred(user_id, listing_id)` — PK (user_id, listing_id)
+- `user_start(user_id PK, listing_id)` — single row per user
+- `searches(id, user_id, query, searched_at)` — pruned to 10 most recent per user
+
+**Legacy ID compatibility:** stored 4-char IDs (pre-v1.7.19) are matched by prefix everywhere (`inSet()` client-side, `startswith`/`[:4]` checks server- and CLI-side). Un-ignoring/un-starring deletes both the 8-char and legacy 4-char rows.
 
 ---
 
 ## Frontend (Single-Page App in `web.py`)
 
-All HTML, CSS, and JavaScript is inlined in a single Python f-string template served from `/`.
+All HTML, CSS, and JavaScript is inlined in a single Python string template served from `/` (`{{version}}` and `{{auth_link}}` placeholders substituted).
+
+### Theming (day/night)
+
+All colors are CSS variables: `:root` defines the **day palette (default)**, `:root[data-theme="dark"]` the night palette. A ☾/☀ header button (`#theme-toggle`) switches themes and persists the choice to `localStorage['aw-theme']`; a one-line `<head>` script applies the stored theme before first paint (no flash). The login page uses the same mechanism. Tinted backgrounds derive from the palette with `color-mix()`.
 
 ### Global State
 
@@ -334,7 +409,7 @@ Each card:
 ```
 ┌─────────────────────────┐
 │    [image 165px tall]   │  lazy-loaded, onerror hides
-│                    ✕  ★ │  ignore / star buttons
+│                 ✕  ⚑  ★ │  ignore / start-marker / star buttons
 ├─────────────────────────┤
 │ [id] [SOURCE BADGE]     │
 │ Title text              │
@@ -343,7 +418,9 @@ Each card:
 └─────────────────────────┘
 ```
 
-- `short_id` shown in monospace gray
+- **⚑** sets the "seen below" start marker at this card (`setStart` → `/api/start`)
+- Membership checks use `inSet(set, id)` — matches full 8-char ID or legacy 4-char prefix
+- `short_id` shown in monospace gold
 - Source badge: colored background per source
 - Price: green text
 - Time badge: green if active, gray if ended/unknown
@@ -369,7 +446,7 @@ Each site pill shows:
 | `year_asc` | `extractYear()` ascending, nulls first |
 | `year_desc` | `extractYear()` descending, nulls last |
 
-`tlMinutes()` converts all time formats (HH:MM:SS, "X days", "XD YH ZM") to minutes. "Ended"/unknown = very large number (sorted to end).
+`tlMinutes()` converts all time formats (HH:MM:SS, "X days", "XD YH ZM", "2D 6H") to minutes. "Ended"/unknown = Infinity (sorted to end). It tracks whether any component *matched* rather than testing `total > 0`, and parses seconds from HH:MM:SS — so a `0:00:45` countdown sorts first instead of being treated as ended. `_time_left_minutes()` in Python mirrors this exactly.
 
 ---
 
@@ -390,6 +467,11 @@ Each site pill shows:
 13. **Tag bar pre-tag snapshot:** `_preTag` attached to allListings result ensures selecting "turbo" doesn't hide "9-5" from tag bar.
 14. **Price comma-aware regex:** `/Bid\s*\$\s*(\d{1,3}(?:,\d{3})*)` prevents grabbing "Bid $17,2512002".
 15. **Longest-title dedup:** Multiple anchors per listing → keep longest title.
+16. **PF geo-redirect race:** finder.porsche.com rewrites its URL with a `position` param seconds after load; wait for the ItemList JSON-LD itself and retry the extract on "Execution context was destroyed".
+17. **Hemmings header sniffing:** register the request handler *before* `goto` — the page calls its search API on initial load, so no interaction is needed to capture auth headers.
+18. **Cloudflare on hosting IPs:** Carvana and Hemmings serve a "Just a moment..." challenge to datacenter IPs that never clears headlessly; scrapers raise a descriptive error so the UI shows an error pill instead of a silent 0. Unfixable in code; a residential proxy would be required.
+19. **C&B Load More cap:** the click loop is bounded (20 rounds) so a sticky button can't hang the scraper.
+20. **String numerics:** JSON-LD/API prices and mileage may be strings with commas; `_num()` coerces before `:,.0f` formatting.
 
 ---
 
@@ -400,15 +482,31 @@ Each site pill shows:
 python auctionwatch.py "porsche 911"
 
 # Output HTML file and open in browser
-python auctionwatch.py "saab 9-3" --html
+python auctionwatch.py "saab 9-3" --html --open
+
+# JSON to stdout (includes short_id / is_active)
+python auctionwatch.py "alfa romeo" --json
+
+# Restrict sites
+python auctionwatch.py "porsche 911" --cab --bat --pf
+
+# ZIP/radius (Cars.com, eBay, CarMax)
+python auctionwatch.py "porsche 911" --zip 98101 --radius 100
+
+# Ignore a listing / set the seen-marker (IDs from the table)
+python auctionwatch.py --ignore a3f2c91b
+python auctionwatch.py --start a3f2c91b
 
 # Debug mode (shows browser, saves debug_*.html files)
 python auctionwatch.py "land rover defender" --debug
 
 # Web server
-python web.py
+python auctionwatch.py --serve            # 127.0.0.1:5173, opens browser
+python auctionwatch.py --serve --port 8000 --host 0.0.0.0
 ```
 
-**Dependencies:** playwright, playwright-stealth (optional), flask, rich (optional)
+**Dependencies:** playwright, playwright-stealth, flask, rich (see requirements.txt)
 
 **Browser:** Chromium via Playwright. User-agent spoofed as Chrome 122 on macOS.
+
+**Deployment:** Dockerfile (python:3.12-slim + Chromium) + railway.toml; Railway auto-deploys on push to main. `DATA_DIR=/data` expects a mounted volume; `$PORT` is honored and binds 0.0.0.0.

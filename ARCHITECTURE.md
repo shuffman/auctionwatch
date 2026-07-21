@@ -2,71 +2,81 @@
 
 ## Overview
 
-AuctionWatch is a single-file Python script (`auctionwatch.py`) that drives a headless Chromium browser via Playwright to scrape four JavaScript-heavy auction SPAs simultaneously. It supports three output modes: terminal table, static HTML, and an interactive web UI.
+AuctionWatch drives a headless Chromium browser via Playwright to scrape eleven JavaScript-heavy car-listing sites simultaneously. It supports three output modes: terminal table, static HTML, and an interactive multi-user web UI.
+
+## Modules
+
+```
+auctionwatch.py   CLI entry point, ALL_SITES registry, scrape orchestration, terminal/HTML output
+scrapers.py       All eleven Playwright scrapers, the shared _JS_EXTRACT extractor, CL_METROS
+web.py            Flask server, SSE streaming, auth, and the full single-page UI (inlined)
+models.py         Listing dataclass + source color maps
+store.py          JSON persistence (CLI) and SQLite persistence (web, per-user)
+version.py        __version__, bumped every release; shown in the UI header
+```
 
 ## High-level flow
 
 ```
 main()
   ├─ parse args
-  ├─ load ~/.auctionwatch.json  (ignored IDs, star marker, starred IDs)
+  ├─ --ignore/--start  →  update ~/.auctionwatch.json
   ├─ --serve  →  serve_web()        (Flask + SSE, blocking)
   └─ otherwise → asyncio.run(run())
                     └─ _scrape_all()
-                         └─ async_playwright → browser → N pages in parallel
-                              ├─ scrape_carsandbids()
-                              ├─ scrape_bat()
-                              ├─ scrape_hagerty()
-                              └─ scrape_pcarmarket()
+                         └─ async_playwright → browser → one page per site, in parallel
+                              ├─ scrape_carsandbids()   ├─ scrape_pf()
+                              ├─ scrape_bat()           ├─ scrape_carmax()
+                              ├─ scrape_hagerty()       ├─ scrape_carvana()
+                              ├─ scrape_pcarmarket()    ├─ scrape_ebay()
+                              ├─ scrape_craigslist()    └─ scrape_hemmings()
+                              └─ scrape_cars_com()
                     filter (ignored, active/inactive)
                     sort by time remaining
                     display_terminal()  /  generate_html()  /  JSON stdout
 ```
 
+Every scraper has the same signature: `scrape_x(page, query, debug, zip_code="", radius=0) -> list[Listing]`. ZIP/radius are honored by Cars.com, eBay Motors, and CarMax; other scrapers ignore them.
+
 ## Scraping strategy
 
-All four sites are single-page apps that render content via JavaScript. Playwright loads each site in a real Chromium tab, waits for listing anchor elements to appear in the DOM, then runs a JavaScript extractor (`_JS_EXTRACT`) inside the browser context.
+Three families of scrapers:
+
+1. **DOM-walking via `_JS_EXTRACT`** (Cars & Bids, Bring a Trailer, Carvana fallback) — a JavaScript extractor injected with `page.evaluate()` that anchors on listing-URL patterns and walks the DOM, avoiding minified class names.
+2. **Site-specific JS extractors** (Hagerty `_HAGERTY_JS`, Cars.com `_CARS_COM_JS`, Craigslist `_CL_JS`, eBay `_EBAY_JS`, CarMax `_CARMAX_JS`) — used where the generic walker is unreliable.
+3. **Embedded JSON / internal APIs** (PCar Market preloaded JSON, Porsche Finder JSON-LD, Carvana JSON-LD, CarMax search API, Hemmings search API) — the most robust option where available.
 
 ### `_JS_EXTRACT` — client-side JS injected via `page.evaluate()`
 
-Rather than depending on minified or generated CSS class names, the extractor anchors on URL patterns and walks the DOM:
+1. **`findCard(link)`** — walks up from a known anchor (`<a href="/auctions/...">`) until it reaches a node containing more than one distinct listing URL; the node just below that boundary is the card container.
+2. **`findPrice(link, card)`** — four-tier cascade: strict `$XX,XXX` leaf → `$`+digits sibling pair (Hagerty split rendering) → comma-aware `"Bid $X,XXX"` in link text → loose short leaf with a `$` pattern.
+3. **`findTitle(link, card)`** — prefers a semantic heading (`h2/h3/h4/strong`); falls back to the most title-like leaf (8–120 chars, not a price/time/UI string per the `UI_NOISE` regex).
+4. **`findTimeLeft(card)`** — `HH:MM:SS` countdown → natural language (`"3 days"`) → PCar compact (`"1D 11H 18M"`) → `"Ended"` on sold/ended/closed words.
+5. **`findLocation(card)`** — matches a `"City, ST"` leaf.
 
-1. **`findCard(link)`** — walks up from a known anchor (`<a href="/auctions/...">`) until it reaches a node that contains more than one distinct listing URL. The node just below that boundary is the card container. This is robust to class name changes.
+Dedupes by URL, keeping the entry with the longest title.
 
-2. **`findPrice(link, card)`** — four-tier cascade:
-   - Leaf element whose entire text is `$XX,XXX` (strict match)
-   - `$` element adjacent to a digit-only sibling (Hagerty's split rendering)
-   - Link text containing `"Bid $X,XXX"` with comma-aware regex
-   - Short leaf element loosely containing a `$` pattern
+### Per-site notes
 
-3. **`findTitle(link, card)`** — prefers a semantic heading (`h2/h3/h4/strong`); falls back to the most title-like leaf element (8–120 chars, not a price, not a UI string). A `UI_NOISE` regex excludes button labels like "Save Listing", "Ends In", "High Bid", etc.
+| Site | Strategy | Notes |
+|---|---|---|
+| Cars & Bids | `_JS_EXTRACT` on `a[href*="/auctions/"]` | Title rebuilt from URL slug; clicks "Load More" (capped at 20 rounds); no countdown ⇒ "Ended" |
+| Bring a Trailer | `_JS_EXTRACT` on `a[href*="/listing/"]` | 2s pause for Knockout.js, scroll, networkidle; year prepended from slug if missing |
+| Hagerty | `_HAGERTY_JS` | Matches auction/classified/listings links; parses "5 days Bid…", "Sold for…", "Bid to…" card text |
+| PCar Market | `#__PRELOADED_AUCTIONS_LIST__` JSON | Paginates by clicking Next and waiting for the JSON blob to change; client-side query-word filter |
+| Craigslist | `_CL_JS` per metro | 18 metros, fresh page each; 20000px viewport; image URLs sniffed from network responses; dedup by pid then (title, price) |
+| Cars.com | `_CARS_COM_JS` on `fuse-card` | Pages 1–10, stops on no new listings; zip/radius params |
+| Porsche Finder | JSON-LD `ItemList` | Model keyword → targeted URL; **waits for the ItemList JSON-LD** (the site rewrites its URL with a geo `position` param a few seconds after load — a fixed pause loses that race) and retries the extract if the JS context is torn down |
+| CarMax | `_CARMAX_JS` + internal `/cars/api/search/run` | Page 1 from embedded script constants, then API pagination (~5 pages); client-side title match |
+| Carvana | JSON-LD, `_JS_EXTRACT` fallback | Waits up to 10s for Cloudflare Turnstile; **raises** "Blocked by Cloudflare challenge" if it never clears (hosting-provider IPs) |
+| eBay Motors | `_EBAY_JS` on `li.s-card` | Category 6001, 3 pages; "2d 6h left" normalized to "2D 6H"; zip via `_stpos`/`_sadis` |
+| Hemmings | Internal `api.hemmings.com/v2/search/listings` | Auth headers sniffed from the page's own initial-load API call (handler registered **before** goto); search-box typing is the fallback; raises on Cloudflare block |
 
-4. **`findTimeLeft(card)`** — tries three formats in order:
-   - `HH:MM:SS` countdown (Cars & Bids, Bring a Trailer)
-   - Natural language: `"3 days"`, `"2 hours"` (Bring a Trailer)
-   - PCar Market compact format: `"1D 11H 18M"` / `"11H 17M"`
-   - Falls back to `"Ended"` if a sold/ended/closed word is found
-
-5. **`findLocation(card)`** — matches `"City, ST"` (US city+state abbreviation) leaf pattern.
-
-The extractor deduplicates by URL, keeping the entry with the longest title (since multiple links may point to the same listing).
-
-### Per-site scraper details
-
-| Site | Search URL | Link selector | Title source | Notes |
-|---|---|---|---|---|
-| Cars & Bids | `/search?q=` | `a[href*="/auctions/"]` | URL slug (path segment 2) | `wait_until="domcontentloaded"` |
-| Bring a Trailer | `/search/?s=` | `a[href*="/listing/"]` | JS extractor | |
-| Hagerty | `/marketplace/search?searchQuery=&type=classifieds` | `a[href*="/marketplace/auction/"]` | JS extractor | Filters "Why Hagerty Marketplace?" promo entries |
-| PCar Market | `/auctions` (no query param) | `a[href*="/auction/"]` | URL slug with trailing `-{digits}` stripped | Selects "All Vehicles" category; client-side query-word filter; iterates all pagination pages via "Next" button |
-
-**PCar Market pagination** — the site uses JS-driven pagination with no URL changes. After scraping page 1, the scraper checks for a `button:has-text("Next")` that is not disabled, captures the first listing URL, clicks Next, and waits for that URL to change before scraping the new page. Repeats until no Next button or button is disabled.
-
-**PCar Market category filter** — on load, clicks `"All Categories"` → `"All Vehicles"` and waits for the dropdown button label to confirm the selection before proceeding.
+**Numeric coercion** — `_num()` coerces JSON prices/mileage that may arrive as strings (`"56,900.00"`) before `:,.0f` formatting, so one odd listing can't kill a whole scraper.
 
 ### `_scrape_all()`
 
-Opens a single browser context, creates one tab per enabled site, and runs all scrapers concurrently with `asyncio.gather()`. Accepts an optional `on_site_done` async callback used by the web server to stream results as they arrive.
+Opens a single browser context, creates one tab per enabled site, and runs all scrapers concurrently with `asyncio.gather()`. The web server variant runs Craigslist in a **separate browser** so its huge viewport and image traffic don't starve the auction scrapers.
 
 ## Data model
 
@@ -86,89 +96,90 @@ class Listing:
 
     @property
     def short_id(self) -> str:
-        # SHA-256 of the URL path (no query params), first 4 hex chars
-        # Deterministic and stable — same listing always gets the same ID
-        path = urlparse(self.url).path.rstrip("/")
-        return hashlib.sha256(path.encode()).hexdigest()[:4]
+        # SHA-256 of the URL path (no query params), first 8 hex chars.
+        # 8 chars since v1.7.19 (4 collided at realistic result counts);
+        # stored 4-char IDs are still honored as prefix matches everywhere.
 
     @property
     def is_active(self) -> bool | None:
-        # True = has a numeric time remaining, False = ended/sold, None = unknown
+        # True = has a numeric time remaining, False = ended/sold, None = unknown (classifieds)
 ```
 
 ## Sorting
 
-`_time_left_minutes(time_left)` converts time-left strings to minutes (parsing D/H/M components) and returns `float("inf")` for ended or unknown listings. Used as the sort key in both the terminal output and the web UI's `allListings()` JS function.
+`_time_left_minutes(time_left)` (Python) and `tlMinutes()` (JS) convert time-left strings to minutes, parsing D/H/M components and falling back to `HH:MM:SS` (seconds included, so a `0:00:45` auction sorts first rather than as ended). Ended/unknown → infinity. Both track whether *anything* parsed rather than testing `total > 0`.
 
-## Persistent store
+## Persistence
 
-`~/.auctionwatch.json` is a plain JSON file with three keys:
+**CLI** — `~/.auctionwatch.json`:
 
 ```json
-{
-  "ignored": ["a3f2", "bb01"],
-  "start": "c7de",
-  "starred": ["bb01"]
-}
+{ "ignored": ["a3f2c91b"], "start": "c7de1902", "starred": ["bb01aa23"] }
 ```
 
-- **ignored** — listing short IDs permanently hidden from results
-- **start** — short ID of the "seen below" divider; listings at or after this position are dimmed
-- **starred** — short IDs the user has starred (gold border in web UI)
+**Web** — SQLite at `$DATA_DIR/.auctionwatch.db` (defaults to `~`); tables `users(id, username, password_hash)`, `ignored(user_id, listing_id)`, `starred(user_id, listing_id)`, `user_start(user_id, listing_id)`, `searches(user_id, query, searched_at)`. Passwords are pbkdf2-hashed (werkzeug; pbkdf2 rather than scrypt for Python 3.9 compatibility). Accounts created before passwords existed are claimed by their first successful login. The Flask session key is stored in `$DATA_DIR/.auctionwatch.secret` with mode 600.
 
-All mutations go through atomic read-modify-write helpers (`store_ignore`, `store_set_start`, `store_set_starred`, etc.).
+Un-ignoring/un-starring also deletes any legacy 4-char row for the same listing.
 
 ## Output modes
 
 ### Terminal (`display_terminal`)
 
-Uses the `rich` library. Column widths are computed as `min(max(header_len, max_content_len), cap) + 2` — never wider than content. Listings before `start_id` are printed normally; a `─── seen below ───` separator precedes the rest, which are dimmed. Query params are stripped from displayed URLs.
+Rich table; column widths fit content with caps. Listings before `start_id` print normally, then a `─── seen below ───` divider and dimmed rows. Start-ID matching uses `startswith` so legacy 4-char markers still work.
 
 ### Static HTML (`generate_html`)
 
-A self-contained dark-themed card grid rendered as an f-string template. No JavaScript; purely static.
+A self-contained dark-themed card grid rendered as an f-string template. No JavaScript; purely static. (Not themed — the interactive UI's day/night mode does not apply here.)
 
 ### Interactive web UI (`serve_web`)
 
-Flask application with four routes:
+Flask application:
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/` | GET | Serves the single-page app HTML |
-| `/api/search/stream` | GET | SSE stream; scrapes and emits `site` events as each scraper finishes, then a `done` event |
-| `/api/ignore` | POST | Adds ID to ignored store |
-| `/api/start` | POST | Sets start marker in store |
-| `/api/star` | POST | Toggles starred state for an ID |
-| `/api/store` | GET | Returns current ignored/start/starred state |
+| `/` | GET | Serves the single-page app |
+| `/login` | GET/POST | Username+password sign-in; registers new usernames |
+| `/logout` | GET | Clears the session |
+| `/api/search/stream` | GET | SSE stream; `site` event per scraper, then `done` |
+| `/api/ignore` | POST | Toggle ignore for the signed-in user |
+| `/api/start` | POST | Set the start marker |
+| `/api/star` | POST | Toggle star |
+| `/api/store` | GET | Current ignored/start/starred state |
+| `/api/searches` | GET | 10 most recent queries |
 
-**Async-to-sync bridge** — Flask is synchronous but Playwright requires an asyncio event loop. `search_stream` starts a daemon `threading.Thread` that creates a fresh event loop (`asyncio.new_event_loop()`), runs the scrape coroutine, and pushes results into a `queue.Queue`. The Flask generator function reads from the queue and yields SSE frames. This avoids running Playwright inside Flask's request thread.
+The three write endpoints return `{"ok": true, "saved": bool}` — `saved` is false for guests, and the client shows a one-time "sign in to keep stars & ignores" notice.
 
-**SSE streaming** — each site fires a `site` event with `{site, listings[], error?}` as it completes. The client inserts cards immediately. A final `done` event carries the `start_id` from the store so the seen-divider is placed correctly.
+**Async-to-sync bridge** — Flask is synchronous but Playwright needs asyncio. `search_stream` starts a daemon thread with a fresh event loop, runs the scrape, and pushes per-site results into a `queue.Queue`; the Flask generator yields SSE frames from the queue.
 
 ## Web UI (embedded in `_WEB_HTML`)
 
-The frontend is a ~170-line raw string constant containing a complete single-page application. No build step; no external dependencies.
+A complete single-page app in one raw string. No build step; no external dependencies.
+
+**Theming** — all colors are CSS variables. `:root` holds the day palette (default); `:root[data-theme="dark"]` holds the night palette. A ☾/☀ header button toggles and persists the choice in `localStorage` (`aw-theme`); a one-line `<head>` script applies it before first paint. The login page shares the mechanism.
 
 Key client-side state:
 
 ```js
 let st = {
-  bysite: {},        // site_key → Listing[]  (full unfiltered results per site)
-  serverStart: '',   // short_id of seen-divider
-  starred: new Set(),// short_ids that are starred
-  lastQ: '',
-  lastT: '',
-  es: null,          // active EventSource
+  bysite: {},          // site_key → Listing[]  (full unfiltered results per site)
+  siteData: {},        // site_key → {stats, error} for status-pill tooltips
+  serverStart: '',     // short_id of seen-divider
+  starred: new Set(),  // may contain legacy 4-char IDs
+  ignored: new Set(),
+  tagState: new Map(), // tag → 'require' | 'prohibit'
+  es: null,            // active EventSource
 };
 ```
 
-`allListings()` derives the visible, filtered, sorted list from `st.bysite` on every render call:
-1. Filter to enabled site pills
-2. Filter to active-only if that toggle is on
-3. Sort by `tlMinutes(time_left)` ascending
+`inSet(set, id)` checks membership by full ID **or** 4-char prefix (legacy compatibility).
 
-Toggling any pill or filter immediately calls `render()` — no round-trip to the server.
+`allListings()` derives the visible list on every render: site pills → cars-only → active-only → ignored/starred → year/price ranges → tag filters (with a `_preTag` snapshot for the tag bar) → sort. All filter state round-trips through the URL query string.
 
 **Card actions:**
-- **✕** (ignore) — removes card with fade animation, deletes from `st.bysite`, POSTs to `/api/ignore`
-- **★** (star) — toggles `.starred` class and `.on` on the button in-place (no full re-render), POSTs to `/api/star`
+- **✕** (ignore) — fades the card out, POSTs `/api/ignore`
+- **⚑** (start marker) — sets the "seen below" divider at this card, POSTs `/api/start`
+- **★** (star) — toggles gold border in place, POSTs `/api/star`
+
+## Deployment
+
+`Dockerfile` (python:3.12-slim + Chromium) with `railway.toml`; Railway auto-deploys on push to main. `DATA_DIR=/data` expects a mounted volume. Carvana and Hemmings are Cloudflare-blocked on hosting-provider IPs and surface that as scraper errors rather than empty results.
