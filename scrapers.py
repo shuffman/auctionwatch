@@ -619,9 +619,9 @@ CL_METROS = [
     ("Seattle",        "seattle"),
     ("Spokane",        "spokane"),
     ("Bellingham",     "bellingham"),
-    ("Olympia",        "olympia"),
+    ("Olympic Peninsula", "olympic"),  # olympia.craigslist.org doesn't exist; Olympia proper is a Seattle subarea
     ("Yakima",         "yakima"),
-    ("Tri-Cities",     "tricities"),
+    ("Tri-Cities",     "kpr"),  # kennewick-pasco-richland; tricities.craigslist.org is Tri-Cities TENNESSEE
     ("Wenatchee",      "wenatchee"),
     # Pacific Northwest — Oregon
     ("Portland",       "portland"),
@@ -994,8 +994,9 @@ async def scrape_carvana(page: Page, query: str, debug: bool = False, zip_code: 
                 break
             await page.wait_for_timeout(1000)
         else:
-            _log(f"[{source}] Blocked by Cloudflare challenge — skipping", "warning")
-            return listings
+            # Raise so the UI shows an error pill with the reason instead of a silent 0.
+            # Happens on datacenter IPs (e.g. Railway) — the challenge never clears there.
+            raise RuntimeError("Blocked by Cloudflare challenge (hosting-provider IP)")
 
         await page.wait_for_timeout(2000)
 
@@ -1350,7 +1351,6 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False, zip_code:
     try:
         _log(f"[{source}] Loading search page")
         await page.goto(f"{base}/classifieds/cars-for-sale", wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
 
         # Capture auth headers from the first API call (triggered by typing)
         api_headers: dict = {}
@@ -1363,8 +1363,11 @@ async def scrape_hemmings(page: Page, query: str, debug: bool = False, zip_code:
 
         page.on("request", _on_request)
 
-        search = await page.query_selector('[placeholder="Keyword Search"]')
-        if not search:
+        # Wait for the input instead of a fixed pause — hydration takes longer on
+        # slow containers (Railway) and a one-shot query_selector raced it.
+        try:
+            search = await page.wait_for_selector('[placeholder="Keyword Search"]', timeout=20000)
+        except PlaywrightTimeout:
             _log(f"[{source}] Search input not found", "warning")
             return listings
         await search.fill(query)
