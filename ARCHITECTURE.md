@@ -64,7 +64,7 @@ Dedupes by URL, keeping the entry with the longest title.
 | Bring a Trailer | `_JS_EXTRACT` on `a[href*="/listing/"]` | 2s pause for Knockout.js, scroll, networkidle; year prepended from slug if missing |
 | Hagerty | `_HAGERTY_JS` | Matches auction/classified/listings links; parses "5 days Bid…", "Sold for…", "Bid to…" card text |
 | PCar Market | `#__PRELOADED_AUCTIONS_LIST__` JSON | Paginates by clicking Next and waiting for the JSON blob to change; client-side query-word filter |
-| Craigslist | `_CL_JS` per metro | 18 metros, fresh page each; 20000px viewport; image URLs sniffed from network responses; dedup by pid then (title, price) |
+| Craigslist | `_CL_JS` per metro | ~40 major US metros, fresh page each, 4 concurrently; 20000px viewport; image URLs sniffed from network responses; dedup by pid then (title, price) |
 | Cars.com | `_CARS_COM_JS` on `fuse-card` | Pages 1–10, stops on no new listings; zip/radius params |
 | Porsche Finder | JSON-LD `ItemList` | Model keyword → targeted URL; **waits for the ItemList JSON-LD** (the site rewrites its URL with a geo `position` param a few seconds after load — a fixed pause loses that race) and retries the extract if the JS context is torn down |
 | CarMax | `_CARMAX_JS` + internal `/cars/api/search/run` | Page 1 from embedded script constants, then API pagination (~5 pages); client-side title match |

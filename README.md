@@ -3,7 +3,7 @@
 Search car listings across eleven sites simultaneously — auctions and fixed-price — from one search box.
 
 **Auction sites:** Cars & Bids, Bring a Trailer, Hagerty Marketplace, PCar Market, eBay Motors
-**Fixed-price sites:** Craigslist (18 western metros), Cars.com, Porsche Finder, CarMax, Carvana, Hemmings
+**Fixed-price sites:** Craigslist (~40 major US metros), Cars.com, Porsche Finder, CarMax, Carvana, Hemmings
 
 ## Installation
 
@@ -62,7 +62,7 @@ python auctionwatch.py "porsche 911" --bat           # Bring a Trailer only
 python auctionwatch.py "porsche 911" --hagerty       # Hagerty Marketplace
 python auctionwatch.py "porsche 911" --pcar          # PCar Market
 python auctionwatch.py "porsche 911" --pf            # Porsche Finder (finder.porsche.com)
-python auctionwatch.py "porsche 911" --cl            # Craigslist (west coast metros)
+python auctionwatch.py "porsche 911" --cl            # Craigslist (~40 major US metros)
 python auctionwatch.py "porsche 911" --carscom       # Cars.com
 python auctionwatch.py "porsche 911" --carmax        # CarMax
 python auctionwatch.py "porsche 911" --carvana       # Carvana

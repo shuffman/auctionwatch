@@ -176,33 +176,18 @@ Learn, Contact, Make Offer, Ends In, High Bid, Sold For, Starting Bid
 - **URL:** `https://{metro}.craigslist.org/search/cta?query={query}&srchType=T&bundleDuplicates=1`
   - `srchType=T` = titles only
   - `bundleDuplicates=1` = suppress cross-posts
-- **Metros (18 total):**
-
-| Name | Subdomain |
-|---|---|
-| Seattle | seattle |
-| Spokane | spokane |
-| Bellingham | bellingham |
-| Olympic Peninsula | olympic |
-| Yakima | yakima |
-| Tri-Cities | kpr |
-| Wenatchee | wenatchee |
-| Portland | portland |
-| Eugene | eugene |
-| Salem | salem |
-| Bend | bend |
-| Medford | medford |
-| Boise | boise |
-| Los Angeles | losangeles |
-| San Francisco | sfbay |
-| Las Vegas | lasvegas |
-| Phoenix | phoenix |
-| Salt Lake City | saltlake |
+- **Metros (42 total, see `CL_METROS`):**
+  - **PNW:** seattle, spokane, bellingham, olympic, yakima, kpr, wenatchee, portland, eugene, salem, bend, medford, boise
+  - **West/SW:** losangeles, orangecounty, inlandempire, sandiego, sfbay, sacramento, lasvegas, phoenix, saltlake, denver
+  - **Texas:** dallas, houston, austin, sanantonio
+  - **Midwest:** chicago, detroit, minneapolis, stlouis, kansascity
+  - **South/East:** atlanta, nashville, charlotte, miami (South Florida), tampa, orlando, newyork, philadelphia, washingtondc, boston
 
 Gotchas encoded in the list: `olympia.craigslist.org` does not exist (Olympia proper is a Seattle-site subarea), and `tricities.craigslist.org` is Tri-Cities **Tennessee** — Washington's is `kpr` (Kennewick-Pasco-Richland).
 
 - **Browser:** Separate Playwright browser instance from auction sites (prevents viewport/I/O starvation)
-- **Per-metro:** Fresh page per metro (avoids session-based rate limiting)
+- **Per-metro:** Fresh page per metro (avoids session-based rate limiting); metros run 4 at a time via `asyncio.Semaphore` — ~40 metros complete in roughly the time 18 sequential ones did
+- **Attribution note:** cross-metro dedup keeps the first copy seen, so per-metro counts are first-come under concurrency
 - **Viewport:** 1280×20000 before navigation (forces IntersectionObserver to load all ~160 results)
 - **Image capture:** Intercept `response` events for `images.craigslist.org/d/{pid}/...` → build `pid → image_url` map
 - **Selector:** `.cl-search-result` → `a.posting-title`

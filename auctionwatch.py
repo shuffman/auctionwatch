@@ -612,7 +612,7 @@ examples:
     site_group.add_argument("--pf",      dest="sites", action="append_const", const="pf",
                             help="Search Porsche Finder (finder.porsche.com)")
     site_group.add_argument("--cl",      dest="sites", action="append_const", const="cl",
-                            help="Search Craigslist (west coast metros)")
+                            help="Search Craigslist (~40 major US metros)")
     site_group.add_argument("--carmax",      dest="sites", action="append_const", const="carmax",
                             help="Search CarMax")
     site_group.add_argument("--carvana",     dest="sites", action="append_const", const="carvana",

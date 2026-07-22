@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import re
 import sys
@@ -631,12 +632,39 @@ CL_METROS = [
     ("Medford",        "medford"),
     # Pacific Northwest — Idaho
     ("Boise",          "boise"),
-    # Southwest
+    # West / Southwest
     ("Los Angeles",    "losangeles"),
+    ("Orange County",  "orangecounty"),
+    ("Inland Empire",  "inlandempire"),
+    ("San Diego",      "sandiego"),
     ("San Francisco",  "sfbay"),
+    ("Sacramento",     "sacramento"),
     ("Las Vegas",      "lasvegas"),
     ("Phoenix",        "phoenix"),
     ("Salt Lake City", "saltlake"),
+    ("Denver",         "denver"),
+    # Texas
+    ("Dallas",         "dallas"),
+    ("Houston",        "houston"),
+    ("Austin",         "austin"),
+    ("San Antonio",    "sanantonio"),
+    # Midwest
+    ("Chicago",        "chicago"),
+    ("Detroit",        "detroit"),
+    ("Minneapolis",    "minneapolis"),
+    ("St. Louis",      "stlouis"),
+    ("Kansas City",    "kansascity"),
+    # South / East
+    ("Atlanta",        "atlanta"),
+    ("Nashville",      "nashville"),
+    ("Charlotte",      "charlotte"),
+    ("South Florida",  "miami"),
+    ("Tampa Bay",      "tampa"),
+    ("Orlando",        "orlando"),
+    ("New York",       "newyork"),
+    ("Philadelphia",   "philadelphia"),
+    ("Washington DC",  "washingtondc"),
+    ("Boston",         "boston"),
 ]
 
 _CL_JS = """() => {
@@ -682,7 +710,7 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False, zip_cod
 
     ctx = page.context
 
-    for city_name, subdomain in CL_METROS:
+    async def _one_metro(city_name: str, subdomain: str):
         url = f"https://{subdomain}.craigslist.org/search/cta?query={quote_plus(query)}&srchType=T&bundleDuplicates=1"
         # Fresh page per metro: clears cookies/session so CL can't correlate
         # requests across subdomains and rate-limit after the first hit.
@@ -736,6 +764,15 @@ async def scrape_craigslist(page: Page, query: str, debug: bool = False, zip_cod
         finally:
             await p.close()
 
+    # Bounded concurrency: 4 metros at a time keeps 40+ metros to roughly the
+    # runtime the old sequential 18 had, without hammering CL from one IP.
+    sem = asyncio.Semaphore(4)
+
+    async def _guarded(city_name: str, subdomain: str):
+        async with sem:
+            await _one_metro(city_name, subdomain)
+
+    await asyncio.gather(*[_guarded(n, s) for n, s in CL_METROS])
     return listings
 
 
