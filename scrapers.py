@@ -1072,7 +1072,8 @@ _PF_HAS_LD = """() => {
 }"""
 
 
-async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0) -> list[Listing]:
+async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str = "", radius: int = 0,
+                    year_lo: int = 0, year_hi: int = 0) -> list[Listing]:
     source = "Porsche Finder"
     base = "https://finder.porsche.com/us/en-US"
     listings: list[Listing] = []
@@ -1086,16 +1087,40 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
             model_key = key
             break
 
-    # Words to filter client-side (everything except "porsche" and short words)
+    # Year bounds: explicit args (web UI year range) win; else years mentioned in the query
+    q_years = [int(y) for y in re.findall(r'\b(19[5-9]\d|20[0-4]\d)\b', query)]
+    lo = year_lo or (min(q_years) if q_years else 0)
+    hi = year_hi or (max(q_years) if q_years else 0)
+
+    # Words to filter client-side (everything except "porsche", short words, and years —
+    # "2011 2012 boxster" can't require BOTH years in one title; years become the lo/hi range)
     filter_words = [w for w in re.split(r'\W+', q_lower)
-                    if len(w) > 2 and w not in ('porsche', 'the', 'and', 'for')]
+                    if len(w) > 2 and w not in ('porsche', 'the', 'and', 'for')
+                    and not re.fullmatch(r'(19|20)\d{2}', w)]
+
+    # Left alone, the site auto-appends position=<geo-city>,lat,lng,<50-200 mile radius>,
+    # silently hiding most of the country's inventory. -1 is the site's own
+    # "any distance" value. With a non-distance sort the coordinates are irrelevant.
+    pos = "position=USA%2C39.8283%2C-98.5795%2C-1"
+    # Results sort closest-first by default and we page a bounded window, so distant
+    # cars never surface. When a year bound exists, sort by model year toward it and
+    # stop paginating once past the bound; otherwise take the site's default order.
+    if hi:
+        order = "modelYear_asc"
+    elif lo:
+        order = "modelYear_desc"
+    else:
+        order = ""
 
     search_base = f"{base}/search/{model_key}?model={model_key}" if model_key else f"{base}/search"
     page_sep = "&" if "?" in search_base else "?"
+    search_base = f"{search_base}{page_sep}{pos}" + (f"&order={order}" if order else "")
+
+    max_pages = 25 if (lo or hi) else 10  # year-bounded runs early-stop, so a high cap is cheap
 
     try:
-        for page_num in range(1, 6):  # max 5 pages = 75 results
-            url = f"{search_base}{page_sep}page={page_num}" if page_num > 1 else search_base
+        for page_num in range(1, max_pages + 1):
+            url = f"{search_base}&page={page_num}" if page_num > 1 else search_base
             _log(f"[{source}] Fetching page {page_num}: {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=25000)
 
@@ -1152,6 +1177,10 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
                     tl = title.lower()
                     if not all(w in tl for w in filter_words):
                         continue
+                if lo or hi:
+                    y = int(year) if year.isdigit() else 0
+                    if y and ((lo and y < lo) or (hi and y > hi)):
+                        continue
 
                 price_val = _num(offers.get("price"))
                 price     = f"${price_val:,.0f}" if price_val else ""
@@ -1176,6 +1205,14 @@ async def scrape_pf(page: Page, query: str, debug: bool = False, zip_code: str =
             _log(f"[{source}] Page {page_num}: {len(items)} items")
             if len(items) < 15:
                 break  # last page
+            # Year-sorted runs: stop once the whole page is past the requested bound
+            page_years = [int(str(i.get("modelDate") or "0")[:4] or 0) for i in items]
+            if order == "modelYear_asc" and hi and page_years and min(page_years) > hi:
+                _log(f"[{source}] Past model year {hi}, stopping")
+                break
+            if order == "modelYear_desc" and lo and page_years and max(page_years) < lo:
+                _log(f"[{source}] Past model year {lo}, stopping")
+                break
             await page.wait_for_timeout(400)
 
     except PlaywrightTimeout:

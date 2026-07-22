@@ -850,7 +850,9 @@ function doSearch(e, keepTags=false){
   const zip=document.getElementById('zip').value.trim();
   const rad=document.getElementById('radius').value;
   const locParams=(zip?`&zip=${encodeURIComponent(zip)}`:'')+(zip&&rad!=='0'?`&radius=${rad}`:'');
-  const url=`/api/search/stream?q=${encodeURIComponent(q)}&${sp}${activeOnly?'&active=1':''}${locParams}`;
+  const ylo=document.getElementById('year-lo').value, yhi=document.getElementById('year-hi').value;
+  const yearParams=(ylo?`&ylo=${encodeURIComponent(ylo)}`:'')+(yhi?`&yhi=${encodeURIComponent(yhi)}`:'');
+  const url=`/api/search/stream?q=${encodeURIComponent(q)}&${sp}${activeOnly?'&active=1':''}${locParams}${yearParams}`;
   sites.forEach(s=>setSitePill(s,'loading',SN[s]));
   const es=new EventSource(url);
   st.es=es;
@@ -1070,10 +1072,15 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
         sites    = freq.args.getlist("sites") or list(ALL_SITES.keys())
         act_only = freq.args.get("active") == "1"
         zip_code = freq.args.get("zip", "").strip()
-        try:
-            radius = int(freq.args.get("radius", "0") or "0")
-        except ValueError:
-            radius = 0
+
+        def _int_arg(name):
+            try:
+                return int(freq.args.get(name, "0") or "0")
+            except ValueError:
+                return 0
+        radius  = _int_arg("radius")
+        year_lo = _int_arg("ylo")
+        year_hi = _int_arg("yhi")
 
         if not q:
             return jsonify({"error": "no query"}), 400
@@ -1107,8 +1114,10 @@ def serve_web(initial_query: str = "", port: int = 5173, host: str = ""):
 
                     async def _one(i, key, name, scraper_fn):
                         t0 = time.time()
+                        # Porsche Finder uses the year range to sort/bound its pagination
+                        extra = {"year_lo": year_lo, "year_hi": year_hi} if key == "pf" else {}
                         try:
-                            listings = await scraper_fn(pages[i], q, False, zip_code=zip_code, radius=radius)
+                            listings = await scraper_fn(pages[i], q, False, zip_code=zip_code, radius=radius, **extra)
                             elapsed = round(time.time() - t0, 1)
                             if act_only:
                                 listings = [l for l in listings if l.is_active is not False]
