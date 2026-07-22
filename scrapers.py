@@ -953,7 +953,13 @@ async def scrape_carmax(page: Page, query: str, debug: bool = False, zip_code: s
     try:
         _log(f"[{source}] Fetching {search_url}")
         await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
+        # Poll for the inline car data instead of a fixed 2s pause
+        try:
+            await page.wait_for_function(
+                "() => [...document.scripts].some(s => /const cars = /.test(s.textContent))",
+                timeout=8000)
+        except PlaywrightTimeout:
+            pass
 
         if debug:
             _save_debug(await page.content(), "carmax")
@@ -967,12 +973,26 @@ async def scrape_carmax(page: Page, query: str, debug: bool = False, zip_code: s
         _ingest(cars)
         _log(f"[{source}] Page 1: {len(cars)} items (total ~{total_count})")
 
+        # CarMax silently rewrites unknown keywords (gt3 → /cars/volkswagen/gti) with
+        # no opt-out: the API only takes keywords through the same rewriting resolver.
+        # If the resolved path shares nothing with the query and nothing matched,
+        # these are results for a different car — bail instead of paging junk.
+        path_words = [w for w in re.split(r'\W+', requested_url.lower()) if w and w != "cars"]
+        rewritten = bool(path_words) and not any(
+            any(pw in qw or qw in pw for qw in query_words) for pw in path_words)
+        if rewritten and not listings:
+            _log(f"[{source}] Keyword rewritten to {requested_url!r} — no matching inventory", "warning")
+            return listings
+
         # Paginate via internal search API (same endpoint the page uses for "See more")
         if len(cars) >= 24 and total_count > 24 and zip_code and requested_url:
             import uuid as _uuid
             visitor_id = str(_uuid.uuid4())
             skip = 24
             max_pages = 4  # up to 5 pages total (~120 results)
+            # bestmatch sort puts matches first; consecutive all-miss pages mean
+            # the rest won't match either. Page 1 with no matches starts the streak.
+            zero_streak = 0 if listings else 1
 
             while skip < total_count and skip < 24 * (max_pages + 1):
                 api_url = (
@@ -996,6 +1016,13 @@ async def scrape_carmax(page: Page, query: str, debug: bool = False, zip_code: s
                 new = len(listings) - before
                 page_num = skip // 24 + 1
                 _log(f"[{source}] Page {page_num}: {len(batch)} items ({new} new)")
+                if new == 0:
+                    zero_streak += 1
+                    if zero_streak >= 2:
+                        _log(f"[{source}] No matches in consecutive pages — stopping")
+                        break
+                else:
+                    zero_streak = 0
                 if len(batch) < 24:
                     break
                 skip += 24

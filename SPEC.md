@@ -226,6 +226,7 @@ Gotchas encoded in the list: `olympia.craigslist.org` does not exist (Olympia pr
 - **Pages 2+:** internal API `GET /cars/api/search/run?uri=…&skip=N&take=24&zipCode=…&visitorID={uuid4}` via in-page `fetch` (credentials included); up to 5 pages total
 - **Client filter:** every query word must appear in the built title (`year make model trim`)
 - **Dedup:** by `stockNumber`; listing URL is `/car/{stockNumber}`
+- **Keyword rewriting:** CarMax silently rewrites unknown keywords (gt3 → `/cars/volkswagen/gti`) and there is NO opt-out — the API only accepts keywords through the same resolver (a bare `search=` param on the API is ignored entirely). The scraper detects a resolved path sharing no words with the query and bails with a warning. Pagination also stops after two consecutive pages with zero matching cars (bestmatch sort ⇒ later pages won't match), and the initial wait polls for the inline `const cars` data instead of a fixed pause.
 
 ---
 
